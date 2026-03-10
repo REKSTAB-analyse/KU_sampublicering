@@ -1,0 +1,126 @@
+<style>
+#node-info-panel {
+    display: none;
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 340px;
+    max-height: 580px;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 1px solid #e6eaf0;
+    border-radius: 8px;
+    padding: 0;
+    font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+    font-size: 13px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.10);
+    z-index: 9999;
+}
+#node-info-panel h3 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #31333f;
+    padding: 12px 14px 10px 14px;
+    border-bottom: 1px solid #e6eaf0;
+    background: #f8f9fb;
+    border-radius: 8px 8px 0 0;
+}
+#node-info-panel .meta {
+    color: #6b7280;
+    font-size: 12px;
+    padding: 8px 14px 4px 14px;
+    margin: 0;
+    border-bottom: 1px solid #f0f2f6;
+}
+#node-info-panel table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+}
+#node-info-panel thead tr {
+    border-bottom: 2px solid #e6eaf0;
+}
+#node-info-panel th {
+    text-align: left;
+    color: #6b7280;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 6px 8px;
+    background: #f8f9fb;
+    border-bottom: 2px solid #e6eaf0;
+}
+#node-info-panel td {
+    padding: 5px 8px;
+    border-bottom: 1px solid #f0f2f6;
+    color: #31333f;
+    font-size: 12px;
+}
+#node-info-panel tbody tr:hover {
+    background: #f0f2f6;
+}
+#node-info-panel tbody tr:last-child td {
+    border-bottom: none;
+}
+#node-info-panel .close-btn {
+    float: right;
+    cursor: pointer;
+    color: #9ca3af;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1;
+}
+#node-info-panel .close-btn:hover {
+    color: #31333f;
+}
+#node-info-panel .intra { color: #122947; font-weight: 600; }
+#node-info-panel .inter { color: #c2668a; font-weight: 600; }
+</style>
+
+<div id="node-info-panel">
+  <h3 id="panel-title">
+    Node
+    <span class="close-btn" onclick="document.getElementById('node-info-panel').style.display='none'">✕</span>
+  </h3>
+  <div class="meta" id="panel-meta"></div>
+  <table>
+    <thead><tr><th>Samarbejdspartner</th><th>Pubs</th><th>Type</th></tr></thead>
+    <tbody id="panel-body"></tbody>
+  </table>
+</div>
+
+<script>
+var nodeInfo = __NODE_INFO_JSON__;
+function attachClickHandler() {
+    if (typeof network === 'undefined') {
+        setTimeout(attachClickHandler, 200);
+        return;
+    }
+    network.on("click", function(params) {
+        if (params.nodes.length === 0) {
+            document.getElementById('node-info-panel').style.display = 'none';
+            return;
+        }
+        var nodeId = params.nodes[0];
+        var info = nodeInfo[nodeId];
+        if (!info) return;
+        document.getElementById('panel-title').textContent = info.label;
+        document.getElementById('panel-meta').textContent = 'Forfatterbidrag: ' + info.size;
+        var tbody = document.getElementById('panel-body');
+        tbody.innerHTML = '';
+        if (info.neighbours.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" style="color:#999">Ingen kanter i udsnittet</td></tr>';
+        } else {
+            info.neighbours.forEach(function(n) {
+                var cls = n.type === 'Intra' ? 'intra' : 'inter';
+                tbody.innerHTML += '<tr><td>' + n.label + '</td><td>' + n.pubs + '</td><td class="' + cls + '">' + n.type + '</td></tr>';
+            });
+        }
+        document.getElementById('node-info-panel').style.display = 'block';
+    });
+}
+attachClickHandler();
+</script>
