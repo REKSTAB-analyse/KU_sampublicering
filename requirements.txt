@@ -1,0 +1,9 @@
+streamlit
+paramiko
+networkx
+pyvis
+matplotlib
+numpy
+pyarrow
+plotly
+openpyxl

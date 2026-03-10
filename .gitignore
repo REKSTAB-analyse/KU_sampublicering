@@ -1,0 +1,16 @@
+.streamlit/secrets.toml
+lib/
+app_claude.py
+app_claude_old.py
+app_dummy.py
+app_test.py
+dokumentation.pdf
+network_panel.html
+preprocess_forfatterpositioner.py
+preprocess_ku_totals.py
+sidebar_pills.css
+simple_graph.html
+test_01.py
+theme_test.py
+transform_data.py
+transform_data_old.py
