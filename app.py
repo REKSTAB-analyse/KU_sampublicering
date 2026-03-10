@@ -24,23 +24,26 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 import random
+import paramiko
+import base64
 
 # ---------------------------------------------------------------------------
 # CONFIG - all paths in one place
 # ---------------------------------------------------------------------------
 
-DATA_DIR       = Path("H:/Sampubliceringsanalyse/Data")
-JSON_PATH      = DATA_DIR / "vip_transformed.json"
-HR_CSV_PATH    = DATA_DIR / "Personalesammensætning.csv" # Do I need this file?
-INST_FILTER_PATH = DATA_DIR / "Fakulteter_institutter.csv"
-STILLING_CSV_PATH = DATA_DIR / "KU_stillingstyper.csv"
-PUBTYPE_CSV_PATH = DATA_DIR / "Publikationstyper_mod.csv"
-KU_TOTALS_PATH = DATA_DIR / "ku_totals.json"
-FORFATTERPOSITIONER_PATH = DATA_DIR / "forfatterpositioner.json"
-CURIS_CSV_PATH = DATA_DIR / "KU_titles_CURIS.csv"
+_ERDA = st.secrets["erda"]
+DATA_PATH = _ERDA["data_path"]
 
-COLORS_PATH  = Path("C:/Users/rjp530/Desktop/ku-farver02.json")
-LOGO_PATH    = "S:/FAD-REKSEK-REKSTAB-ABI-Analyse/quarto/ku_skabeloner/KU-logo.png"
+@st.cache_resource
+def get_sftp():
+    transport = paramiko.Transport((_ERDA["host"], 22))
+    transport.connect(username=_ERDA["username"], password=_ERDA["password"])
+    return paramiko.SFTPClient.from_transport(transport)
+
+def read_file(filename: str) -> bytes:
+    sftp = get_sftp()
+    with sftp.open(f"{DATA_PATH}/{filename}", "rb") as f:
+        return f.read()
 
 # ---------------------------------------------------------------------------
 # CONSTANTS
@@ -79,85 +82,81 @@ FAC_ABBRS = {
 # ---------------------------------------------------------------------------
 # DATA LOADING
 # ---------------------------------------------------------------------------
-
 @st.cache_data
-def load_network_data(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        raw = json.load(f)
+def load_network_data() -> dict:
+    raw = json.loads(read_file("vip_transformed.json"))
     return {int(k): v for k, v in raw.items()}
 
-
 @st.cache_data
-def load_ku_colors(path: str) -> dict:
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-
-@st.cache_data
-def load_stilling_map(path: str) -> dict:
+def load_stilling_map() -> dict:
     result = {}
-    with open(path, encoding="utf-8") as f:
-        reader = csv.DictReader(f, delimiter=";")
-        for row in reader:
-            raw = row["Stillingstype"].strip()
-            med = row["medtages?"].strip()
-            grp = row["Stillingsgruppe"].strip()
-            if med == "1" and grp:
-                result[raw] = grp
+    reader = csv.DictReader(
+        read_file("KU_stillingstyper.csv").decode("utf-8").splitlines(),
+        delimiter=";"
+    )
+    for row in reader:
+        raw = row["Stillingstype"].strip()
+        med = row["medtages?"].strip()
+        grp = row["Stillingsgruppe"].strip()
+        if med == "1" and grp:
+            result[raw] = grp
     return result
 
-
 @st.cache_data
-def load_inst_filter(path: str) -> tuple[set, dict]:
+def load_inst_filter() -> tuple[set, dict]:
     inst_ok = set()
     inst_to_fac = {}
-    with open(path, encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f, delimiter=";")
-        for row in reader:
-            if row["medtages?"].strip() == "1":
-                fac  = row["Fakultet"].strip()
-                inst = row["Institut"].strip()
-                alt  = row["Alternativ"].strip()
-                if inst:
-                    inst_ok.add(inst)
-                    inst_to_fac[inst] = fac
-                if alt:
-                    inst_ok.add(alt)
-                    inst_to_fac[alt] = fac
+    reader = csv.DictReader(
+        read_file("Fakulteter_institutter.csv").decode("utf-8-sig").splitlines(),
+        delimiter=";"
+    )
+    for row in reader:
+        if row["medtages?"].strip() == "1":
+            fac  = row["Fakultet"].strip()
+            inst = row["Institut"].strip()
+            alt  = row["Alternativ"].strip()
+            if inst:
+                inst_ok.add(inst)
+                inst_to_fac[inst] = fac
+            if alt:
+                inst_ok.add(alt)
+                inst_to_fac[alt] = fac
     return inst_ok, inst_to_fac
 
 @st.cache_data
-def load_pubtype_map(path_csv: str) -> dict:
+def load_pubtype_map() -> dict:
     mapping = OrderedDict()
-    
-    with open(path_csv, encoding = "utf-8", newline = "") as f:
-        reader = csv.DictReader(f, delimiter = ";")
-        field_map = {h.strip(): h for h in reader.fieldnames or []}
-        col_raw = next((field_map[k] for k in field_map if k.lower() == "publikationstype"), None)
-        col_collapsed = next((field_map[k] for k in field_map if k.lower() == "kollapset"), None)
-        
-        if not col_raw or not col_collapsed:
-            raise ValueError()
-
-        for row in reader:
-            raw = (row.get(col_raw) or "").strip()
-            col = (row.get(col_collapsed) or "").strip()
-            if not raw:
-                continue
-            mapping[raw] = col or raw
-    
+    lines = read_file("Publikationstyper_mod.csv").decode("utf-8").splitlines()
+    reader = csv.DictReader(lines, delimiter=";")
+    field_map = {h.strip(): h for h in reader.fieldnames or []}
+    col_raw = next((field_map[k] for k in field_map if k.lower() == "publikationstype"), None)
+    col_collapsed = next((field_map[k] for k in field_map if k.lower() == "kollapset"), None)
+    if not col_raw or not col_collapsed:
+        raise ValueError()
+    for row in reader:
+        raw = (row.get(col_raw) or "").strip()
+        col = (row.get(col_collapsed) or "").strip()
+        if not raw:
+            continue
+        mapping[raw] = col or raw
     return dict(mapping)
 
 @st.cache_data
-def load_forfatterpositioner(path: str) -> dict:
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+def load_forfatterpositioner() -> dict:
+    return json.loads(read_file("forfatterpositioner.json"))
 
 @st.cache_data
-def load_ku_totals(path: str) -> dict:
-    with open(path, encoding="utf-8") as f:
-        raw = json.load(f)
+def load_ku_totals() -> dict:
+    raw = json.loads(read_file("ku_totals.json"))
     return {int(k): v for k, v in raw.items()}
+
+@st.cache_data
+def load_ku_colors() -> dict:
+    return json.loads(read_file("ku-farver02.json"))
+
+@st.cache_data  
+def load_logo() -> bytes:
+    return read_file("KU-logo.png")
 
 # ---------------------------------------------------------------------------
 # COLOR HELPERS
@@ -1298,7 +1297,7 @@ def main():
     # -----------------------------------------------------------------------
     # Load data 
     # -----------------------------------------------------------------------
-    data_by_year_CURIS = load_network_data(str(JSON_PATH))
+    data_by_year_CURIS = load_network_data()
 
     data_by_year_OpenAlex = {
         2021: {
@@ -1424,27 +1423,29 @@ def main():
 
         return merged
     
-    ku_farver    = load_ku_colors(str(COLORS_PATH))
+    ku_farver = load_ku_colors()
     faculty_base_colors = build_faculty_colors(ku_farver)
     grp_colors = stillingsgruppe_colors(ku_farver)
 
-    forfatterpositioner = load_forfatterpositioner(str(FORFATTERPOSITIONER_PATH))
-    ku_totals = load_ku_totals(str(KU_TOTALS_PATH))
-    _, inst_to_fac = load_inst_filter(str(INST_FILTER_PATH))
+    forfatterpositioner = load_forfatterpositioner()
+    ku_totals = load_ku_totals()
+    _, inst_to_fac = load_inst_filter()
 
     # -----------------------------------------------------------------------
     # Page config & header
     # -----------------------------------------------------------------------
 
+    logo_bytes = load_logo()
+    logo_b64 = base64.b64encode(logo_bytes).decode()
+
     st.set_page_config(
         page_title="REKSTAB Analyse",
-        page_icon=LOGO_PATH,
+        #page_icon=f"data:image/png;base64,{logo_b64}",
         layout="wide",
     )
-
     col_logo, col_title = st.columns([1, 4])
     with col_logo:
-        st.image(LOGO_PATH)
+        st.markdown(f'<img src="data:image/png;base64,{logo_b64}" width="150">', unsafe_allow_html=True)
     with col_title:
         st.title("Sampublicering på Københavns Universitet")
 
@@ -2442,9 +2443,9 @@ institut eller stillingsgruppe, afhængig af valgte filtre.
                                       raw_nodes_unfiltered, raw_edges_unfiltered,
                                       all_years_data)
 
-    if "Datagrundlag" in tabs_dict:
-        with tabs_dict["Datagrundlag"]:
-            render_tab_datagrundlag(year, mode, all_groups, selected_facs, selected_insts, selected_grps)
+    #if "Datagrundlag" in tabs_dict:
+        #with tabs_dict["Datagrundlag"]:
+            #render_tab_datagrundlag(year, mode, all_groups, selected_facs, selected_insts, selected_grps)
 
     st.markdown("""
 <hr style="margin-top: 50px;">
