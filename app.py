@@ -78,6 +78,23 @@ FAC_ABBRS = {
     "Det Sundhedsvidenskabelige Fakultet": "SUND",
 }
 
+def make_abbr(name: str, existing: set = None) -> str:
+    """Lav forkortelse af et navn ved at tage forbogstaver af ord, minus stopord."""
+    _stop = {"for", "og", "i", "af", "til", "det", "den", "de", "en", "et",
+             "med", "på", "ved", "om", "fra", "under", "over"}
+    words = [w for w in name.split() if w.lower() not in _stop]
+    abbr = "".join(w[0].upper() for w in words if w)
+    if not abbr:
+        abbr = name[:4].upper()
+    # Hvis forkortelsen kolliderer, tilføj ekstra bogstav fra første ord
+    if existing is not None:
+        original = abbr
+        i = 1
+        while abbr in existing:
+            abbr = original + (words[0][i].upper() if i < len(words[0]) else str(i))
+            i += 1
+    return abbr
+
 
 # ---------------------------------------------------------------------------
 # DATA LOADING
@@ -158,53 +175,56 @@ def load_ku_colors() -> dict:
 def load_logo() -> bytes:
     return read_file("KU-logo.png")
 
+@st.cache_data
+def load_forfatterantal(path: str) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return json.load(read_file("forfatterantal.json"))
+
+
 # ---------------------------------------------------------------------------
 # COLOR HELPERS
 # ---------------------------------------------------------------------------
 _KU_PALETTE_RAW = [
-    "#901a1E",  # Rød mørk
+    # Mørke — høj kontrast, bruges først
     "#122947",  # Blå mørk
-    "#0a5963",  # Petroleum mørk
+    "#901a1E",  # Rød mørk
     "#39641c",  # Grøn mørk
-    "#c73028",  # Rød mellem
-    "#425570",  # Blå mellem
-    "#197f8e",  # Petroleum mellem
-    "#4b8325",  # Grøn mellem
-    "#dB3B0A",  # Rød lys
-    "#bac7d9",  # Blå lys
-    "#b7d7de",  # Petroleum lys
-    "#becaa8",  # Grøn lys
-    "#ffbd38",  # Gul
+    "#0a5963",  # Petroleum mørk
     "#3d3d3d",  # Grå mørk
+    "#7d5402",  # Brun mørk (JUR)
+    # Mellem — god læsbarhed
+    "#ffbd38",  # Gul (adskiller)
+    "#4b8325",  # Grøn mellem
+    "#c73028",  # Rød mellem
+    "#197f8e",  # Petroleum mellem
+    "#425570",  # Blå mellem
     "#666666",  # Grå mellem
+    # Lyse — bruges sidst, kun ved mange kategorier
+    "#bac7d9",  # Blå lys
+    "#dB3B0A",  # Rød-orange lys
+    "#becaa8",  # Grøn lys
+    "#b7d7de",  # Petroleum lys
+    "#e1dfdf",  # Grå lys
 ]
 
 def ku_color_sequence(n: int, seed: int = 26) -> list[str]:
-    rng = random.Random(seed)
-
-    slots: list[list[str]] = [[], [], [], []]
-    for i, c in enumerate(_KU_PALETTE_RAW):
-        slots[i % 4].append(c)
-    interleaved = [c for group in zip(*slots) for c in group]
-
-    used = len(interleaved)
-    for c in _KU_PALETTE_RAW[used:]:
-        interleaved.append(c)
-    
-    shuffled = list(interleaved)
-    rng.shuffle(shuffled)
-
-    if n <= len(shuffled):
-        return shuffled[:n]
-    
-    # Fall back to Plotly default colours for the remainder
+    if n <= len(_KU_PALETTE_RAW):
+        return _KU_PALETTE_RAW[:n]
+    # Fallback ved flere kategorier end paletten rækker
     plotly_defaults = [
-        "#636EFA","#EF553B","#00CC96","#AB63FA","#FFA15A",
-        "#19D3F3","#FF6692","#B6E880","#FF97FF","#FECB52",
+        "#3A1A5F",  # Lilla mørk (TEO)
+        "#7d5402",  # Brun mellem
+        "#c45c5f",  # Rosa-rød
+        "#5C1012",  # Rød meget mørk
+        "#6B84A0",  # Blå-grå
+        "#fefaf2",  # Champagne
+        "#7A131A",  # Bordeaux
+        "#aaaaaa",  # Grå neutral
+        "#ffbd38",  # Gul (gentaget)
+        "#becaa8",  # Grøn lys (gentaget)
     ]
-
-    extras = plotly_defaults * ((n - len(shuffled)) // len(plotly_defaults) + 1)
-    return shuffled + extras[:n - len(shuffled)]
+    extras = plotly_defaults * ((n - len(_KU_PALETTE_RAW)) // len(plotly_defaults) + 1)
+    return _KU_PALETTE_RAW + extras[:n - len(_KU_PALETTE_RAW)]
 
 def build_faculty_colors(ku_farver: dict) -> dict:
     return {
@@ -775,6 +795,12 @@ def edge_type(u: str, v: str, node_meta: dict, mode: str) -> str:
         gv = node_meta[v].get("fac", "")
     return "intra" if (gu and gu == gv) else "inter"
 
+def edge_type_grp(u: str, v: str, node_meta: dict) -> str:
+    """Position-group-level intra/inter classification."""
+    gu = node_meta[u].get("grp", "")
+    gv = node_meta[v].get("grp", "")
+    return "intra" if (gu and gu == gv) else "inter"
+
 def edge_type_fac(u: str, v: str, node_meta: dict) -> str:
     """Faculty-level intra/inter classification (always faculty, regardless of mode)."""
     fu = node_meta[u].get("fac", "")
@@ -1050,6 +1076,26 @@ def intra_inter_labels(mode: str) -> tuple:
         return "intra-gruppe", "inter-gruppe"
     return "intra-fakultet", "inter-fakultet"
 
+def _compute_mod_pre(G2, nodes_keep, node_meta, comm_key):
+    try:
+        _connected = {n for n in G2.nodes() if G2.degree(n) > 0}
+        G_conn = G2.subgraph(_connected).copy()
+        comms = {}
+        for nid in nodes_keep:
+            gl = node_meta.get(nid, {}).get(comm_key, "")
+            if gl:
+                comms.setdefault(gl, []).append(nid)
+        filtered = [[n for n in c if n in _connected] for c in comms.values()]
+        filtered = [c for c in filtered if c]
+        if not filtered or G_conn.number_of_edges() == 0:
+            return float("nan")
+        if any(len(c) == 1 for c in filtered):
+            return float("nan")
+        val = modq(G_conn, filtered, weight="weight")
+        return val if val >= 0 else float("nan")
+    except Exception:
+        return float("nan")
+
 def compute_year_snapshot(content: dict, mode: str,
                            year: int, 
                            raw_nodes_pre: dict,
@@ -1142,6 +1188,10 @@ def compute_year_snapshot(content: dict, mode: str,
                           if edge_type_inst(u, v, node_meta) == "intra")
     inter_inst_pubs = sum(w for u, v, w, *_ in edges_keep
                           if edge_type_inst(u, v, node_meta) == "inter")
+    intra_grp_pubs = sum(w for u, v, w, *_ in edges_keep
+                         if edge_type_grp(u, v, node_meta) == "intra")
+    inter_grp_pubs = sum(w for u, v, w, *_ in edges_keep
+                         if edge_type_grp(u, v, node_meta) == "inter")
 
     fac_tot, inst_tot, grp_tot = {}, {}, {}
     for nid in nodes_keep:
@@ -1153,7 +1203,7 @@ def compute_year_snapshot(content: dict, mode: str,
     
 
     G2 = nx.Graph()
-    for u in nodes_keep: G2.add_node(u)
+    for u in pre_nodes_for_mode(node_meta, mode): G2.add_node(u)
     for u, v, w, *_ in edges_keep: G2.add_edge(u, v, weight=w)
     density = nx.density(G2)
 
@@ -1162,14 +1212,11 @@ def compute_year_snapshot(content: dict, mode: str,
         modularity_greedy_snap = float("nan")
     else:
         #comm_key_snap = "fac" if mode in ("F","FS","FI","FG","FIG") else ("inst" if mode in ("I","IG","IS") else "grp")
-        if mode in ("F", "FS"):
-            comm_key_snap = None
-        elif mode in ("FI", "I", "IS"):
-            comm_key_snap = "fac"
-        elif mode in ("FG", "IG", "G"):
-            comm_key_snap = "inst"
-        else:
-            comm_key_snap = "grp"
+        comm_key_snap = (
+            "fac"  if mode in ("F", "FS", "FI", "FG", "FIG") else
+            "inst" if mode in ("I", "IG", "IS") else
+            "grp"
+        )
         
         if comm_key_snap is None:
             modularity_pre_snap = float("nan")
@@ -1184,18 +1231,25 @@ def compute_year_snapshot(content: dict, mode: str,
                     communities_snap.append(members)
                     seen_snap.add(gl)
             try:
-                has_singleton_pre = any(len(c) == 1 for c in communities_snap)
-                modularity_pre_snap = float("nan") if has_singleton_pre else (
-                                        modq(G2, communities_snap, weight="weight") if communities_snap and G2.number_of_edges() > 0 else float("nan")
-                                        )
+                _connected_snap = {n for n in G2.nodes() if G2.degree(n) > 0}
+                _G2_conn_snap = G2.subgraph(_connected_snap).copy()
+                _communities_snap_filtered = [
+                    [n for n in c if n in _connected_snap] for c in communities_snap
+                ]
+                _communities_snap_filtered = [c for c in _communities_snap_filtered if c]
+                has_singleton_pre = any(len(c) == 1 for c in _communities_snap_filtered)
+                if not has_singleton_pre and _communities_snap_filtered and _G2_conn_snap.number_of_edges() > 0:
+                    _mod_val = modq(_G2_conn_snap, _communities_snap_filtered, weight="weight")
+                    modularity_pre_snap = _mod_val if _mod_val >= 0 else float("nan")
+                else:
+                    modularity_pre_snap = float("nan")
             except Exception:
                 modularity_pre_snap = float("nan")
             try:
                 if G2.number_of_edges() > 0 and G2.number_of_nodes() > 1:
-                    modularity_greedy_snap = modq(G2, list(greedy_modularity_communities(G2, weight="weight")), weight="weight")
-                    _gc = list(greedy_modularity_communities(G2, weight = "weight"))
-                    has_singleton = any(len(c) == 1 for c in _gc)
-                    modularity_greedy_snap = float("nan") if has_singleton else modq(G2, _gc, weight="weight")
+                    _gc_full = list(greedy_modularity_communities(G2, weight="weight"))
+                    has_singleton = any(len(c) == 1 for c in _gc_full)
+                    modularity_greedy_snap = float("nan") if has_singleton else modq(G2, _gc_full, weight="weight")
                 else:
                     modularity_greedy_snap = float("nan")
             except Exception:
@@ -1230,7 +1284,7 @@ def compute_year_snapshot(content: dict, mode: str,
     combo_pubs: dict[str, int] = {}
     for u, v, w, sex_combo in edges_keep:
         if sex_combo:
-            combo_pubs[sex_combo] = combo_pubs.get(sex_combo, 0) + int(round(w)) 
+            combo_pubs[sex_combo] = combo_pubs.get(sex_combo, 0) + int(round(w))
 
     # Top co-publication pairs
     top_pairs: dict[str, float] = {}
@@ -1265,6 +1319,70 @@ def compute_year_snapshot(content: dict, mode: str,
     else:  # S, N, eller ingen filter valgt
         ku_pubs    = _ku.get("total_pubs",    0)
         ku_authors = _ku.get("total_authors", 0)
+    
+    # Per-enhed intra/inter (Mulighed A: kanter hvor mindst én node tilhører enheden)
+    fac_intra_ew: dict[str, float] = {}
+    fac_inter_ew: dict[str, float] = {}
+    for u, v, w, *_ in edges_keep:
+        fu = node_meta.get(u, {}).get("fac", "")
+        fv = node_meta.get(v, {}).get("fac", "")
+        et = "intra" if (fu and fu == fv) else "inter"
+        for f in {fu, fv}:
+            if not f: continue
+            if et == "intra":
+                fac_intra_ew[f] = fac_intra_ew.get(f, 0.0) + w / 2
+            else:
+                fac_inter_ew[f] = fac_inter_ew.get(f, 0.0) + w / 2
+
+    inst_intra_ew: dict[str, float] = {}
+    inst_inter_ew: dict[str, float] = {}
+    for u, v, w, *_ in edges_keep:
+        iu = node_meta.get(u, {}).get("inst", "")
+        iv = node_meta.get(v, {}).get("inst", "")
+        et = "intra" if (iu and iu == iv) else "inter"
+        for i in {iu, iv}:
+            if not i: continue
+            if et == "intra":
+                inst_intra_ew[i] = inst_intra_ew.get(i, 0.0) + w / 2
+            else:
+                inst_inter_ew[i] = inst_inter_ew.get(i, 0.0) + w / 2
+
+    grp_intra_ew: dict[str, float] = {}
+    grp_inter_ew: dict[str, float] = {}
+    # Krydstabuleret: fac → inst → vægt
+    fac_inst_intra_ew: dict[str, dict[str, float]] = {}
+    fac_inst_inter_ew: dict[str, dict[str, float]] = {}
+    # Krydstabuleret: fac → grp → vægt, inst → grp → vægt
+    fac_grp_intra_ew: dict[str, dict[str, float]] = {}
+    # Krydstabuleret: fac → grp → vægt, inst → grp → vægt
+    fac_grp_intra_ew: dict[str, dict[str, float]] = {}
+    fac_grp_inter_ew: dict[str, dict[str, float]] = {}
+    inst_grp_intra_ew: dict[str, dict[str, float]] = {}
+    inst_grp_inter_ew: dict[str, dict[str, float]] = {}
+    for u, v, w, *_ in edges_keep:
+        gu = node_meta.get(u, {}).get("grp", "")
+        gv = node_meta.get(v, {}).get("grp", "")
+        fu = node_meta.get(u, {}).get("fac", "")
+        fv = node_meta.get(v, {}).get("fac", "")
+        iu = node_meta.get(u, {}).get("inst", "")
+        iv = node_meta.get(v, {}).get("inst", "")
+        # fac → inst krydstabulering
+        et_inst = "intra" if (iu and iu == iv) else "inter"
+        for inst, fac in [(iu, fu), (iv, fv)]:
+            if inst and fac:
+                d_fi = fac_inst_intra_ew if et_inst == "intra" else fac_inst_inter_ew
+                d_fi.setdefault(fac, {})[inst] = d_fi.setdefault(fac, {}).get(inst, 0.0) + w / 2
+        et_grp = "intra" if (gu and gu == gv) else "inter"
+        for g, f, i in [(gu, fu, iu), (gv, fv, iv)]:
+            if not g: continue
+            d_grp = grp_intra_ew if et_grp == "intra" else grp_inter_ew
+            d_grp[g] = d_grp.get(g, 0.0) + w / 2
+            if f:
+                d_fg = fac_grp_intra_ew if et_grp == "intra" else fac_grp_inter_ew
+                d_fg.setdefault(f, {})[g] = d_fg.setdefault(f, {}).get(g, 0.0) + w / 2
+            if i:
+                d_ig = inst_grp_intra_ew if et_grp == "intra" else inst_grp_inter_ew
+                d_ig.setdefault(i, {})[g] = d_ig.setdefault(i, {}).get(g, 0.0) + w / 2
 
     return {
         "total_pubs":        total_pubs,
@@ -1273,6 +1391,8 @@ def compute_year_snapshot(content: dict, mode: str,
         "inter_pubs":        inter_pubs,
         "intra_inst_pubs":   intra_inst_pubs,
         "inter_inst_pubs":   inter_inst_pubs,
+        "intra_grp_pubs":    intra_grp_pubs,
+        "inter_grp_pubs":    inter_grp_pubs,
         "fac_tot":           fac_tot,
         "inst_tot":          inst_tot,
         "grp_tot":           grp_tot,
@@ -1281,6 +1401,9 @@ def compute_year_snapshot(content: dict, mode: str,
         "grp_ew":            grp_ew,
         "density":           density,
         "modularity_pre":    modularity_pre_snap,
+        "modularity_pre_fac":  _compute_mod_pre(G2, nodes_keep, node_meta, "fac"),
+        "modularity_pre_inst": _compute_mod_pre(G2, nodes_keep, node_meta, "inst"),
+        "modularity_pre_grp":  _compute_mod_pre(G2, nodes_keep, node_meta, "grp"),
         "modularity_greedy": modularity_greedy_snap,
         "sex_bidrag":        sex_bidrag,
         "combo_pubs":        combo_pubs,
@@ -1290,14 +1413,28 @@ def compute_year_snapshot(content: dict, mode: str,
         "ku_total_authors": ku_authors,
         "nat_bidrag": nat_bidrag,
         "sampub_count_raw": sampub_count_raw,
+        "sampub_rate": round(total_pubs / total_authors, 4) if total_authors else 0.0,
+        "fac_intra_ew":      fac_intra_ew,
+        "fac_inter_ew":      fac_inter_ew,
+        "inst_intra_ew":     inst_intra_ew,
+        "inst_inter_ew":     inst_inter_ew,
+        "grp_intra_ew":      grp_intra_ew,
+        "grp_inter_ew":      grp_inter_ew,
+        "fac_inst_intra_ew": fac_inst_intra_ew,
+        "fac_inst_inter_ew": fac_inst_inter_ew,
+        "fac_grp_intra_ew":  fac_grp_intra_ew,
+        "fac_grp_inter_ew":  fac_grp_inter_ew,
+        "inst_grp_intra_ew": inst_grp_intra_ew,
+        "inst_grp_inter_ew": inst_grp_inter_ew,
     }
+
 
 
 def main():
     # -----------------------------------------------------------------------
     # Load data 
     # -----------------------------------------------------------------------
-    data_by_year_CURIS = load_network_data()
+    data_by_year_CURIS = load_network_data(str(JSON_PATH))
 
     data_by_year_OpenAlex = {
         2021: {
@@ -1423,29 +1560,29 @@ def main():
 
         return merged
     
-    ku_farver = load_ku_colors()
+    ku_farver    = load_ku_colors(str(COLORS_PATH))
     faculty_base_colors = build_faculty_colors(ku_farver)
     grp_colors = stillingsgruppe_colors(ku_farver)
 
-    forfatterpositioner = load_forfatterpositioner()
-    ku_totals = load_ku_totals()
-    _, inst_to_fac = load_inst_filter()
+    forfatterpositioner = load_forfatterpositioner(str(FORFATTERPOSITIONER_PATH))
+    ku_totals = load_ku_totals(str(KU_TOTALS_PATH))
+    _, inst_to_fac = load_inst_filter(str(INST_FILTER_PATH))
+    forfatterantal_data    = load_forfatterantal(str(FORFATTERANTAL_JSON))
+    publikationstyper_data = load_publikationstyper(str(PUBLIKATIONSTYPER_JSON))
 
     # -----------------------------------------------------------------------
     # Page config & header
     # -----------------------------------------------------------------------
 
-    logo_bytes = load_logo()
-    logo_b64 = base64.b64encode(logo_bytes).decode()
-
     st.set_page_config(
         page_title="REKSTAB Analyse",
-        #page_icon=f"data:image/png;base64,{logo_b64}",
+        page_icon=LOGO_PATH,
         layout="wide",
     )
+
     col_logo, col_title = st.columns([1, 4])
     with col_logo:
-        st.markdown(f'<img src="data:image/png;base64,{logo_b64}" width="150">', unsafe_allow_html=True)
+        st.image(LOGO_PATH)
     with col_title:
         st.title("Sampublicering på Københavns Universitet")
 
@@ -1602,19 +1739,35 @@ def main():
                 show_inst = st.checkbox("**Institutter**",      value=st.session_state.get("cb_inst", False), key="cb_inst")
                 show_grp  = st.checkbox("**Stillingsgrupper**", value=st.session_state.get("cb_grp",  True),  key="cb_grp")
 
-            all_insts_sorted = sorted({
-                meta.get("inst", "UKENDT")
-                for yc in data_by_year.values()
-                for _, meta in yc["nodes"]
-            })
+            _all_insts_by_fac: dict[str, list] = {}
+            for yc in data_by_year.values():
+                for _, meta in yc["nodes"]:
+                    f, i = meta.get("fac", ""), meta.get("inst", "")
+                    if f and i and i not in _all_insts_by_fac.setdefault(f, []):
+                        _all_insts_by_fac[f].append(i)
+
             selected_facs = (
                 st.multiselect("Vælg fakulteter (tom = alle)", all_faculties, default=[])
                 if show_fac else []
             )
-            selected_insts = (
-                st.multiselect("Vælg institutter (tom = alle)", all_insts_sorted, default=[])
-                if show_inst else []
-            )
+
+            if show_inst:
+                _inst_opts_sidebar = sorted({
+                    i
+                    for f, insts in _all_insts_by_fac.items()
+                    for i in insts
+                    if not selected_facs or f in selected_facs
+                })
+                selected_insts = st.multiselect(
+                    "Vælg institutter (tom = alle)",
+                    options=_inst_opts_sidebar,
+                    default=[v for v in st.session_state.get("selected_insts_prev", []) if v in _inst_opts_sidebar],
+                    key="selected_insts_ms",
+                )
+                st.session_state["selected_insts_prev"] = selected_insts
+            else:
+                selected_insts = []
+
             selected_grps = (
                 st.multiselect("Vælg stillingsgrupper (tom = alle)", all_groups, default=[])
                 if show_grp else []
@@ -1646,6 +1799,14 @@ def main():
         else:
             show_intra_inst = True
             show_inter_inst = True
+        # Stillingsgruppe-level edge filters
+        _grp_mode = show_grp
+        if _grp_mode:
+            show_intra_grp = st.checkbox("Vis intra-stillingsgruppekanter", True, key="chk_intra_grp")
+            show_inter_grp = st.checkbox("Vis inter-stillingsgruppekanter", True, key="chk_inter_grp")
+        else:
+            show_intra_grp = True
+            show_inter_grp = True
 
     if not show_fac and not show_inst and not show_grp:
         st.error("Vælg mindst ét filter (fakultet, institut eller stillingsgruppe).")
@@ -1817,7 +1978,7 @@ def main():
             key=f"edge_slider_{year}_{mode}",
             help="Kanter med færre sampubliceringer end minimumsværdien skjules. Sæt minimumsværdien højt for kun at se de stærkeste samarbejder.",
         )
-        edge_scale = st.slider("Kantvægt", min_value=1.0, max_value=15.0, value=6.0, step=0.1, key="edge_scale_slider")
+        edge_scale = st.slider("Kantvægt", min_value=1.0, max_value=50.0, value=6.0, step=0.1, key="edge_scale_slider")
 
     st.session_state["edge_range"] = (edge_min, edge_max)
 
@@ -1880,6 +2041,13 @@ def main():
             if et_inst == "intra" and not show_intra_inst:
                 continue
             if et_inst == "inter" and not show_inter_inst:
+                continue
+        # Stillingsgruppe-level filter
+        if _grp_mode:
+            et_grp = edge_type_grp(u, v, node_meta)
+            if et_grp == "intra" and not show_intra_grp:
+                continue
+            if et_grp == "inter" and not show_inter_grp:
                 continue
         if not (edge_min <= int(round(w)) <= edge_max):
             continue
@@ -2286,6 +2454,8 @@ institut eller stillingsgruppe, afhængig af valgte filtre.
     total_pubs = sum(w for _, _, w, *_ in edges_keep)
     intra_pubs = sum(w for u, v, w, *_ in edges_keep if mode not in ("G", "GS") and edge_type(u, v, node_meta, mode) == "intra")
     inter_pubs = sum(w for u, v, w, *_ in edges_keep if mode not in ("G", "GS") and edge_type(u, v, node_meta, mode) == "inter")
+    intra_grp_pubs = sum(w for u, v, w, *_ in edges_keep if edge_type_grp(u, v, node_meta) == "intra")
+    inter_grp_pubs = sum(w for u, v, w, *_ in edges_keep if edge_type_grp(u, v, node_meta) == "inter")
 
     # -----------------------------------------------------------------------
     # Modularity
@@ -2318,9 +2488,16 @@ institut eller stillingsgruppe, afhængig af valgte filtre.
     for nid in G2.nodes():
         if nid not in covered:
             communities.append([nid])
-    has_singleton_pre = any(len(c) == 1 for c in communities)
+    _connected = {n for n in G2.nodes() if G2.degree(n) > 0}
+    G2_connected = G2.subgraph(_connected).copy()
+    communities_filtered = [
+        [n for n in c if n in _connected] for c in communities
+    ]
+    communities_filtered = [c for c in communities_filtered if c]
+    has_singleton_pre = any(len(c) == 1 for c in communities_filtered)
     modularity_pre = float("nan") if has_singleton_pre else (
-    modq(G2, list(communities_dict.values()), weight="weight") if communities and G2.number_of_edges() > 0 else float("nan")
+        modq(G2_connected, communities_filtered, weight="weight")
+        if communities_filtered and G2_connected.number_of_edges() > 0 else float("nan")
     )
     if G2.number_of_edges() > 0 and G2.number_of_nodes() > 1:
         greedy_comms    = list(greedy_modularity_communities(G2, weight="weight"))
@@ -2367,16 +2544,16 @@ institut eller stillingsgruppe, afhængig af valgte filtre.
     # Build tab list dynamically so diversity tabs appear whenever active,
     # regardless of the current org mode.
     _base_tabs = {
-        "FS":  ["Oversigt", "Fakulteter", "Centralitet", "Netværksstruktur", "Datagrundlag"],
-        "IS":  ["Oversigt", "Institutter", "Centralitet", "Netværksstruktur", "Datagrundlag"],
-        "GS":  ["Oversigt", "Stillingsgrupper", "Centralitet", "Netværksstruktur", "Datagrundlag"],
-        "F":   ["Oversigt", "Fakulteter", "Centralitet", "Netværksstruktur", "Datagrundlag"],
-        "FI":  ["Oversigt", "Fakulteter", "Institutter", "Centralitet", "Netværksstruktur", "Datagrundlag"],
-        "FIG": ["Oversigt", "Fakulteter", "Institutter", "Stillingsgrupper", "Centralitet", "Netværksstruktur", "Datagrundlag"],
-        "FG":  ["Oversigt", "Fakulteter", "Stillingsgrupper", "Centralitet", "Netværksstruktur", "Datagrundlag"],
-        "IG":  ["Oversigt", "Institutter", "Stillingsgrupper", "Centralitet", "Netværksstruktur", "Datagrundlag"],
-        "I":   ["Oversigt", "Institutter", "Centralitet", "Netværksstruktur", "Datagrundlag"],
-        "G":   ["Oversigt", "Stillingsgrupper", "Centralitet", "Netværksstruktur", "Datagrundlag"],
+        "FS":  ["Oversigt", "Fakulteter", "Nøgleaktører", "Samarbejdsmønstre", "Datagrundlag"],
+        "IS":  ["Oversigt", "Institutter", "Nøgleaktører", "Samarbejdsmønstre", "Datagrundlag"],
+        "GS":  ["Oversigt", "Stillingsgrupper", "Nøgleaktører", "Samarbejdsmønstre", "Datagrundlag"],
+        "F":   ["Oversigt", "Fakulteter", "Nøgleaktører", "Samarbejdsmønstre", "Datagrundlag"],
+        "FI":  ["Oversigt", "Fakulteter", "Institutter", "Nøgleaktører", "Samarbejdsmønstre", "Datagrundlag"],
+        "FIG": ["Oversigt", "Fakulteter", "Institutter", "Stillingsgrupper", "Nøgleaktører", "Samarbejdsmønstre", "Datagrundlag"],
+        "FG":  ["Oversigt", "Fakulteter", "Stillingsgrupper", "Nøgleaktører", "Samarbejdsmønstre", "Datagrundlag"],
+        "IG":  ["Oversigt", "Institutter", "Stillingsgrupper", "Nøgleaktører", "Samarbejdsmønstre", "Datagrundlag"],
+        "I":   ["Oversigt", "Institutter", "Nøgleaktører", "Samarbejdsmønstre", "Datagrundlag"],
+        "G":   ["Oversigt", "Stillingsgrupper", "Nøgleaktører", "Samarbejdsmønstre", "Datagrundlag"],
     }
     tabs_by_mode = {}
     for _m, _tl in _base_tabs.items():
@@ -2386,7 +2563,7 @@ institut eller stillingsgruppe, afhængig af valgte filtre.
         if analyse_nat:
             _extra.append("Nationaliteter")
         # Insert diversity tabs just before Centralitet
-        _ins = _tl.index("Centralitet")
+        _ins = _tl.index("Nøgleaktører")
         tabs_by_mode[_m] = _tl[:_ins] + _extra + _tl[_ins:]
     tabs_to_show = tabs_by_mode.get(mode, ["Basisstatistik"])
     tabs         = st.tabs(tabs_to_show)
@@ -2397,7 +2574,9 @@ institut eller stillingsgruppe, afhængig af valgte filtre.
                     node_meta, *intra_inter_labels(mode),
                     all_years_data=all_years_data, isolated_nodes=isolated_nodes,
                     total_authors=total_authors,
-                    sampub_count=content.get("sampub_count", 0))
+                    sampub_count=content.get("sampub_count", 0),
+                    intra_grp_pubs=intra_grp_pubs, inter_grp_pubs=inter_grp_pubs
+                    )
 
     if "Fakulteter" in tabs_dict:
         with tabs_dict["Fakulteter"]:
@@ -2417,15 +2596,17 @@ institut eller stillingsgruppe, afhængig af valgte filtre.
                             forfatterpositioner=forfatterpositioner,
                             inst_to_fac=inst_to_fac)
 
-    if "Centralitet" in tabs_dict:
-        with tabs_dict["Centralitet"]:
+    if "Nøgleaktører" in tabs_dict:
+        with tabs_dict["Nøgleaktører"]:
             render_tab_centralitet(year, mode, faculty_wd_sorted, faculty_bs_sorted,
                                    inst_wd_sorted, inst_bs_sorted,
                                    grp_wd_sorted, grp_bs_sorted, node_meta,
-                                   grp_node_wd_sorted, grp_node_bs_sorted)
+                                   grp_node_wd_sorted, grp_node_bs_sorted,
+                                   faculty_base_colors=faculty_base_colors,
+                                   grp_colors=grp_colors)
 
-    if "Netværksstruktur" in tabs_dict:
-        with tabs_dict["Netværksstruktur"]:
+    if "Samarbejdsmønstre" in tabs_dict:
+        with tabs_dict["Samarbejdsmønstre"]:
             render_tab_netvaerksstruktur(year, mode, density, modularity_pre, modularity_greedy,
                              n_comms, communities_dict, greedy_comms, comm_key,
                              edges_keep, node_meta, all_years_data=all_years_data)
@@ -2443,9 +2624,14 @@ institut eller stillingsgruppe, afhængig af valgte filtre.
                                       raw_nodes_unfiltered, raw_edges_unfiltered,
                                       all_years_data)
 
-    #if "Datagrundlag" in tabs_dict:
-        #with tabs_dict["Datagrundlag"]:
-            #render_tab_datagrundlag(year, mode, all_groups, selected_facs, selected_insts, selected_grps)
+    if "Datagrundlag" in tabs_dict:
+        with tabs_dict["Datagrundlag"]:
+            render_tab_datagrundlag(year, mode, all_groups, selected_facs, selected_insts, selected_grps,
+                                    forfatterantal=forfatterantal_data,
+                                    publikationstyper=publikationstyper_data,
+                                    faculty_base_colors=faculty_base_colors,
+                                    years_sorted=sorted(all_years_data.keys()),
+                                    pubtype_map=load_pubtype_map(str(PUBTYPE_CSV_PATH)))
 
     st.markdown("""
 <hr style="margin-top: 50px;">
@@ -2478,7 +2664,7 @@ def _render_share_comparison(org_tot: dict, org_ew: dict, org_label: str, key: s
             "unit":    u,
             "pct_tot": round(pct_tot, 1),
             "pct_ew":  round(pct_ew, 1),
-            "diff":    round(pct_ew - pct_tot, 1),   # positive = "over-publishing"
+            "diff":    round(pct_ew,1) - round(pct_tot, 1),
         })
 
     # ── Scatter: forfatterbidrag% (x) vs kant% (y) ───────────────────────────
@@ -2579,7 +2765,8 @@ def _render_share_comparison(org_tot: dict, org_ew: dict, org_label: str, key: s
 def _render_year_comparison(all_years_data: dict, series: list, title: str,
                              yaxis_label: str = "Forfatterbidrag",
                              key_suffix: str = "",
-                             colors = None):
+                             colors = None,
+                             description: str = None):
     """Render a year-comparison line chart inside a collapsible expander.
 
     Parameters
@@ -2598,6 +2785,8 @@ def _render_year_comparison(all_years_data: dict, series: list, title: str,
 
     years_sorted = sorted(all_years_data.keys())
     st.markdown(f"##### {title}")
+    if description:
+        st.markdown(f"""{description}""")
     
     ku_colors = ku_color_sequence(len(series))
 
@@ -2681,7 +2870,7 @@ def _render_org_bar(edges_keep: list, node_meta: dict, org_key: str, title_label
             x=[x[1] for x in _sorted],
             orientation="h",
             marker_color=_colors,
-            text=[f"{x[1]:,.0f}  ({100*x[1]/_grand:.1f}%)" for x in _sorted],
+            text=[f"{x[1]:,.1f}  ({100*x[1]/_grand:.1f}%)" for x in _sorted],
             textposition="inside",
         ))
         _fig.update_layout(
@@ -2768,7 +2957,7 @@ def _render_org_bar(edges_keep: list, node_meta: dict, org_key: str, title_label
 def render_tab_oversigt(year, mode, edges_keep, total_pubs, intra_pubs, inter_pubs,
                         node_meta, intra_label="intra-fakultet", inter_label="inter-fakultet",
                         all_years_data=None, isolated_nodes=None, total_authors=0,
-                        sampub_count=0):
+                        sampub_count=0, intra_grp_pubs=0, inter_grp_pubs=0):
     _mode_labels = {
         "F":   "fakulteter",
         "FI":  "fakulteter og institutter",
@@ -2789,15 +2978,15 @@ def render_tab_oversigt(year, mode, edges_keep, total_pubs, intra_pubs, inter_pu
         _inter_inst_pubs = sum(w for u, v, w, *_ in edges_keep
                                if edge_type_inst(u, v, node_meta) == "inter")
         _inst_sentence = (
-            f"\n\nPå **institut-niveau** er der **{int(_intra_inst_pubs)} intra-institut**- "
-            f"og **{int(_inter_inst_pubs)} inter-institutpublikationer** - "
-            f"svarende til en intra-andel på "
-            f"**{round(100*_intra_inst_pubs/total_pubs,1) if total_pubs else 0}%** af alle publikationer."
-        )
+f""" På **institut-niveau** er der **{int(_intra_inst_pubs)} intra-institut**- og 
+**{int(_inter_inst_pubs)} inter-institut forfatterpar** - svarende til en intra-andel på 
+**{round(100*_intra_inst_pubs/total_pubs,1) if total_pubs else 0}%** af alle forfatterpar.
+""")
 
     st.markdown(
         f"""
-Dette afsnit giver et samlet overblik over publikationsmængden og de overordnede
+Dette afsnit giver et samlet overblik over publikationsmængden, antal forfatterpar og de 
+overordnede
 sampubliceringsmønstre i det valgte udsnit for **{year}**. Tallene afspejler alene summen af
 publikationer mellem de noder, der er inkluderede på baggrund af de valgte filtre 
 (*{_mode_labels.get(mode, mode)}*).
@@ -2814,9 +3003,9 @@ publikationer mellem de noder, der er inkluderede på baggrund af de valgte filt
               help="Summen af forfatterbidrag for alle noder i det filtrerede netværk")
     
     with col4:
-        _rate = round(sampub_count / total_authors, 2) if total_authors else 0.0
-        st.metric("Sampublikationer per forfatter", _rate,
-                  help="Normaliseret sampubliceringsrate: sampublikationer divideret med antal forfatterbidrag.")
+        _rate = round(total_pubs / total_authors, 2) if total_authors else 0.0
+        st.metric("Sampubliceringsrate (forfatterpar / forfatterbidrag)", _rate,
+                  help="Antal forfatterpar divideret med antal forfatterbidrag — viser hvor mange sampubliceringsrelationer en forsker i gennemsnit indgår i.")
 
     if mode in ("FI", "FIG"):
         _intra_inst_m = sum(w for u, v, w, *_ in edges_keep
@@ -2862,9 +3051,9 @@ publikationer mellem de noder, der er inkluderede på baggrund af de valgte filt
 
     
     _pub_series = [
-        ("Samlet publikationer", "total_pubs", None),
-        ("Intra-publikationer",  "intra_pubs", None),
-        ("Inter-publikationer",  "inter_pubs", None),
+        ("Samlet forfatterpar", "total_pubs", None),
+        ("Intra-forfatterpar",  "intra_pubs", None),
+        ("Inter-forfatterpar",  "inter_pubs", None),
     ]
     if "I" in mode:
         _pub_series += [
@@ -2879,47 +3068,53 @@ publikationer mellem de noder, der er inkluderede på baggrund af de valgte filt
             ("Unikke forfatterbidrag i sampublikationer (filtreret)", "total_authors",      None),
             ("Sampublikationer (ufiltreret, alle noder)",             "sampub_count_raw",   None),
             ("Alle KU-publikationer",                                 "ku_total_pubs",      None),
-            ("Alle unikke KU-forfattere",                             "ku_total_authors",   None)
+            ("Alle unikke KU-forfattere",                             "ku_total_authors",   None),
+            ("Sampubliceringsrate (forfatterpar / forfatterbidrag)",  "sampub_rate",        None),
         ],
-        title="Sammenlign år - publikationsantal og forfatterbidrag",
+        title="Sammenlign år - publikationsantal, forfatterbidrag og forfatterpar",
+        description= "**Tip:** For at aflæse sampubliceringsratenraten i figuren, kan der til højre klikkes på de andre grafer, så de fjernes fra figuren. Det kan også bruges til at gøre forskellene mellem *Unikke forfatterbidrag i sampublikationer (filtreret)* og *Alle unikke KU-forfattere* læsbar.",
         yaxis_label="Antal",
     )
 
-    st.markdown("##### Top sampubliceringer i udsnittet")
+    #st.markdown("##### Top sampubliceringer i udsnittet")
 
-    if not edges_keep:
-        st.info("Ingen sampubliceringer matcher det valgte udsnit.")
-        return
+    #if not edges_keep:
+        #st.error("Ingen sampubliceringer matcher det valgte udsnit.")
+        #return
 
-    max_n     = len(edges_keep)
-    default_n = min(4, max_n)
-    top_n = st.number_input("**Hvor mange sampubliceringer skal vises?**",
-                             min_value=1, max_value=max_n, value=default_n, step=1,
-                             key=f"top_edges_n_{year}_{mode}")
+    #max_n     = len(edges_keep)
+    #default_n = min(4, max_n)
+    #top_n = st.number_input("**Hvor mange sampubliceringer skal vises?**",
+                             #min_value=1, max_value=max_n, value=default_n, step=1,
+                             #key=f"top_edges_n_{year}_{mode}")
 
-    top_edges = sorted(edges_keep, key=lambda x: -x[2])[:top_n]
-    top_edge_rows = []
-    for u, v, w, *_ in top_edges:
-        mu, mv = node_meta.get(u, {}), node_meta.get(v, {})
-        et_type = f"{intra_label.capitalize()}" if mu.get("fac") == mv.get("fac") else f"{inter_label.capitalize()}"
-        top_edge_rows.append({
-            "Den ene node": make_node_label(mu),
-            "Den anden node": make_node_label(mv),
-            "Antal publikationer": int(w),
-            "Type": et_type,
-            "mode": mode,
-        })
+    #top_edges = sorted(edges_keep, key=lambda x: -x[2])[:top_n]
+    #top_edge_rows = []
+    #for u, v, w, *_ in top_edges:
+        #mu, mv = node_meta.get(u, {}), node_meta.get(v, {})
+        #et_type = f"{intra_label.capitalize()}" if mu.get("fac") == mv.get("fac") else f"{inter_label.capitalize()}"
+        #top_edge_rows.append({
+            #"Den ene node": make_node_label(mu),
+            #"Den anden node": make_node_label(mv),
+            #"Antal forfatterpar": int(w),
+            #"Type": et_type,
+            #"mode": mode,
+        #})
 
-    schema = [("Den ene node", pa.string()), ("Den anden node", pa.string()),
-              ("Antal publikationer", pa.int64()), ("Type", pa.string()), ("mode", pa.string())]
-    st.dataframe(build_table(top_edge_rows, schema), width="stretch", hide_index=True)
+    #schema = [
+        #("Den ene node", pa.string()), 
+        #("Den anden node", pa.string()),
+        #("Antal forfatterpar", pa.int64()), 
+        #("Type", pa.string()), 
+        #("mode", pa.string())]
+    #st.dataframe(build_table(top_edge_rows, schema), width="stretch", hide_index=True)
 
-    st.download_button(
-            "Download (.xlsx)",
-            data=rows_to_excel_bytes(top_edge_rows, [n for n, _ in schema]),
-            file_name=f"Top_{top_n}_edges_{year}_{mode}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+    #st.download_button(
+            #"Download (.xlsx)",
+            #data=rows_to_excel_bytes(top_edge_rows, [n for n, _ in schema]),
+            #file_name=f"Top_{top_n}_edges_{year}_{mode}.xlsx",
+            #mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            #)
 
     
     # ── 2. Top-10 mest sampublicerende par over tid ───────────────────────────
@@ -2961,7 +3156,7 @@ publikationer mellem de noder, der er inkluderede på baggrund af de valgte filt
                 marker_color = colors[i]
             ))
         _fig_pairs.update_layout(
-            yaxis_title="Antal sampubliceringer",
+            yaxis_title="Antal forfatterpar",
             xaxis=dict(tickmode="array", tickvals=years_sorted, dtick=1),
             height=420,
             legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="left", x=0),
@@ -2994,24 +3189,46 @@ publikationer mellem de noder, der er inkluderede på baggrund af de valgte filt
     # ── 1. Intra-andel over tid ───────────────────────────────────────────────
     _pct_intra = round(100 * intra_pubs / total_pubs, 1) if total_pubs else 0.0
     _pct_inter = round(100 * inter_pubs / total_pubs, 1) if total_pubs else 0.0
+    _pct_intra_grp = round(100 * intra_grp_pubs / total_pubs, 1) if total_pubs else 0.0
+
+    _grp_modes = {"FG", "FIG", "IG", "G", "GS"}
+    _grp_sentence = ""
+    if mode in _grp_modes and total_pubs > 0:
+        _grp_sentence = (
+            f"\n\nPå **stillingsgruppe-niveau** er der **{int(intra_grp_pubs)} intra-stillingsgruppe**- "
+            f"og **{int(inter_grp_pubs)} inter-stillingsgruppe forfatterpar** - "
+            f"svarende til en intra-andel på **{_pct_intra_grp}%** af alle forfatterpar."
+        )
 
     # Donut: intra vs inter split
     st.markdown(
 f"""#### Intra-/interpublikationer
  Intra-andelen viser, hvor stor en del af sampubliceringerne der foregår inden for samme enhed.
  **{intra_label.capitalize()}-publikationer** dækker over samarbejde inden for samme
-{intra_label.split('-')[1]} og udgør **{int(intra_pubs)}** publikationer
-(**{_pct_intra}%** af totalen), mens **{inter_label}publikationer** - samarbejde på
+{intra_label.split('-')[1]} og udgør **{int(intra_pubs)}** forfatterpar
+(**{_pct_intra}%** af totalen), mens **{inter_label} forfatterpar** - samarbejde på
 tværs af {intra_label.split('-')[1]}er - udgør **{int(inter_pubs)}**
-(**{_pct_inter}%**).{_inst_sentence}
+(**{_pct_inter}%**).{_inst_sentence}{_grp_sentence}
 """)
 
+    _filter_key = f"{int(intra_pubs)}_{int(inter_pubs)}_{int(total_pubs)}"
+    _has_grp_donut = mode in _grp_modes and total_pubs > 0
+
     if total_pubs > 0 and mode not in ("G", "GS"):
-        if mode in ("FIG"):
-            _col_donut, _col_donut2 = st.columns(2)
-        else:
-            _col_donut = st.columns([1])[0]   # full-width single column
+        _show_inst_donut = mode == "FIG"
+        _show_grp_donut  = _has_grp_donut
+
+        _n_donuts = 1 + int(_show_inst_donut) + int(_show_grp_donut)
+
+        if _n_donuts == 3:
+            _col_donut, _col_donut2, _col_donut_grp = st.columns(3)
+        elif _n_donuts == 2:
+            _col_donut, _col_donut_grp = st.columns(2)
             _col_donut2 = None
+        else:
+            _col_donut     = st.columns([1])[0]
+            _col_donut2    = None
+            _col_donut_grp = None
 
         _fig_donut = go.Figure(go.Pie(
             labels=[intra_label.capitalize(), inter_label.capitalize()],
@@ -3020,7 +3237,7 @@ tværs af {intra_label.split('-')[1]}er - udgør **{int(inter_pubs)}**
             marker_colors=["#122947", "#bac7d9"],
             textinfo="percent",
             rotation=45,
-            sort=False,          # preserve label→color assignment
+            sort=False,
             hoverinfo="label+value+percent",
         ))
         _fig_donut.update_layout(
@@ -3030,9 +3247,9 @@ tværs af {intra_label.split('-')[1]}er - udgør **{int(inter_pubs)}**
             legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
         )
         with _col_donut:
-            st.plotly_chart(_fig_donut, width='stretch', key=f"donut_{year}_{mode}")
+            st.plotly_chart(_fig_donut, width='stretch', key=f"donut_{year}_{mode}_{_filter_key}")
 
-        if mode in ("IG", "FIG") and _col_donut2 is not None:
+        if _show_inst_donut and _col_donut2 is not None:
             _intra_inst = sum(w for u, v, w, *_ in edges_keep
                               if edge_type_inst(u, v, node_meta) == "intra")
             _inter_inst = sum(w for u, v, w, *_ in edges_keep
@@ -3044,7 +3261,7 @@ tværs af {intra_label.split('-')[1]}er - udgør **{int(inter_pubs)}**
                 marker_colors=["#122947", "#bac7d9"],
                 textinfo="percent",
                 rotation=45,
-                sort=False,      # preserve label→color assignment
+                sort=False,
                 hoverinfo="label+value+percent",
             ))
             _fig_donut2.update_layout(
@@ -3054,7 +3271,68 @@ tværs af {intra_label.split('-')[1]}er - udgør **{int(inter_pubs)}**
                 legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
             )
             with _col_donut2:
-                st.plotly_chart(_fig_donut2, width='stretch', key=f"donut2_{year}_{mode}")
+                st.plotly_chart(_fig_donut2, width='stretch', key=f"donut2_{year}_{mode}_{_filter_key}")
+
+        if _show_grp_donut and _col_donut_grp is not None:
+            _fig_donut_grp = go.Figure(go.Pie(
+                labels=["Intra-stillingsgruppe", "Inter-stillingsgruppe"],
+                values=[intra_grp_pubs, inter_grp_pubs],
+                hole=0.55,
+                marker_colors=["#39641c", "#becaa8"],
+                textinfo="percent",
+                rotation=45,
+                sort=False,
+                hoverinfo="label+value+percent",
+            ))
+            _fig_donut_grp.update_layout(
+                height=360,
+                margin=dict(t=60, b=60, l=60, r=60),
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+            )
+            with _col_donut_grp:
+                st.plotly_chart(_fig_donut_grp, width='stretch', key=f"donut_grp_{year}_{mode}_{_filter_key}")
+
+    elif _has_grp_donut and mode in ("G", "GS"):
+        _col_donut_g = st.columns([1])[0]
+        _fig_donut_grp = go.Figure(go.Pie(
+            labels=["Intra-stillingsgruppe", "Inter-stillingsgruppe"],
+            values=[intra_grp_pubs, inter_grp_pubs],
+            hole=0.55,
+            marker_colors=["#39641c", "#becaa8"],
+            textinfo="percent",
+            rotation=45,
+            sort=False,
+            hoverinfo="label+value+percent",
+        ))
+        _fig_donut_grp.update_layout(
+            height=360,
+            margin=dict(t=60, b=60, l=60, r=60),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+        )
+        with _col_donut_g:
+            st.plotly_chart(_fig_donut_grp, width='stretch', key=f"donut_grp_{year}_{mode}_{_filter_key}")
+    elif _has_grp_donut and mode in ("G", "GS"):
+        _col_donut_g = st.columns([1])[0]
+        _fig_donut_grp = go.Figure(go.Pie(
+            labels=["Intra-stillingsgruppe", "Inter-stillingsgruppe"],
+            values=[intra_grp_pubs, inter_grp_pubs],
+            hole=0.55,
+            marker_colors=["#39641c", "#becaa8"],
+            textinfo="percent",
+            rotation=45,
+            sort=False,
+            hoverinfo="label+value+percent",
+        ))
+        _fig_donut_grp.update_layout(
+            height=360,
+            margin=dict(t=60, b=60, l=60, r=60),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+        )
+        with _col_donut_g:
+            st.plotly_chart(_fig_donut_grp, width='stretch', key=f"donut_grp_{year}_{mode}_{_filter_key}")
 
     if all_years_data and len(all_years_data) >= 2:
         years_sorted = sorted(all_years_data.keys())
@@ -3063,13 +3341,15 @@ tværs af {intra_label.split('-')[1]}er - udgør **{int(inter_pubs)}**
             tot = snap.get(denom_key, 0)
             return round(100 * snap.get(num_key, 0) / tot, 1) if tot else 0.0
 
-        if mode in ("FIG", "FG", "FI", "IG"):
+        if mode in ("FIG", "FG", "FI", "IG", "G", "GS"):
             years_sorted = sorted(all_years_data.keys())
 
             _intra_fak_pcts  = [_pct(all_years_data[yr], "intra_pubs")      for yr in years_sorted]
             _inter_fak_pcts  = [_pct(all_years_data[yr], "inter_pubs")      for yr in years_sorted]
             _intra_inst_pcts = [_pct(all_years_data[yr], "intra_inst_pubs") for yr in years_sorted]
             _inter_inst_pcts = [_pct(all_years_data[yr], "inter_inst_pubs") for yr in years_sorted]
+            _intra_grp_pcts  = [_pct(all_years_data[yr], "intra_grp_pubs")  for yr in years_sorted]
+            _inter_grp_pcts  = [_pct(all_years_data[yr], "inter_grp_pubs")  for yr in years_sorted]
 
             # Dynamic analytisk tekst
             _first_yr, _last_yr   = years_sorted[0], years_sorted[-1]
@@ -3113,165 +3393,180 @@ Fra **{_first_yr}** til **{_last_yr}** har intra-fakultetandelen bevæget sig fr
 
 {_inst_trend_str}
 """)
-
-            _fig_silo = go.Figure()
-            _fig_silo.add_trace(go.Scatter(
-                x=years_sorted, y=_intra_fak_pcts,
-                mode="lines+markers+text",
-                text=[f"{v}%" for v in _intra_fak_pcts],
-                textposition="top center",
-                line=dict(color="#122947", width=2),
-                marker=dict(size=9),
-                name="Intra-fakultet (%)",
-            ))
-            _fig_silo.add_trace(go.Scatter(
-                x=years_sorted, y=_inter_fak_pcts,
-                mode="lines+markers+text",
-                text=[f"{v}%" for v in _inter_fak_pcts],
-                textposition="bottom center",
-                line=dict(color="#122947", width=2, dash="dot"),
-                marker=dict(size=9),
-                name="Inter-fakultet (%)",
-            ))
-            if "I" in mode: 
-                _fig_silo.add_trace(go.Scatter(
-                    x=years_sorted, y=_intra_inst_pcts,
-                    mode="lines+markers+text",
-                    text=[f"{v}%" for v in _intra_inst_pcts],
-                    textposition="top center",
-                    line=dict(color="#4a7ca8", width=2),
-                    marker=dict(size=9),
-                    name="Intra-institut (%)",
-                ))
-                _fig_silo.add_trace(go.Scatter(
-                    x=years_sorted, y=_inter_inst_pcts,
-                    mode="lines+markers+text",
-                    text=[f"{v}%" for v in _inter_inst_pcts],
-                    textposition="bottom center",
-                    line=dict(color="#4a7ca8", width=2, dash="dot"),
-                    marker=dict(size=9),
-                    name="Inter-institut (%)",
-                ))
-            _fig_silo.update_layout(
-                yaxis_title="Andel af publikationer (%)",
-                yaxis=dict(range=[0, 100]),
-                xaxis=dict(tickmode="array", tickvals=years_sorted, dtick=1),
-                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
-                height=420,
-                margin=dict(t=20, b=80),
+            # Hvilket niveau vises som tabs i denne mode?
+            _tab_level = (
+                "inst" if mode in ("IG", "I", "IS") else
+                "grp"  if mode in ("G", "GS")       else
+                "fac"                                      # F, FS, FI, FG, FIG
             )
-            st.plotly_chart(_fig_silo, width='stretch')
+            _tab_intra_key, _tab_inter_key, _tab_label = {
+                "fac":  ("fac_intra_ew",  "fac_inter_ew",  "Fakultet"),
+                "inst": ("inst_intra_ew", "inst_inter_ew", "Institut"),
+                "grp":  ("grp_intra_ew",  "grp_inter_ew",  "Stillingsgruppe"),
+            }[_tab_level]
 
-            _silo_rows = [
-                {
-                    "År":                     yr,
-                    "Intra-fak":              int(all_years_data[yr].get("intra_pubs", 0)),
-                    "Inter-fak":              int(all_years_data[yr].get("inter_pubs", 0)),
-                    "Intra-fak (%)":          _pct(all_years_data[yr], "intra_pubs"),
-                    "Intra-inst":             int(all_years_data[yr].get("intra_inst_pubs", 0)),
-                    "Inter-inst":             int(all_years_data[yr].get("inter_inst_pubs", 0)),
-                    "Intra-inst (%)":         _pct(all_years_data[yr], "intra_inst_pubs"),
-                    "Total publikationer":    int(all_years_data[yr].get("total_pubs", 0)),
-                }
+            # Alle enheder på tab-niveauet på tværs af år
+            _tab_units = sorted({
+                u
                 for yr in years_sorted
-            ]
-            _silo_schema = [
-                ("År",                   pa.int64()),
-                ("Intra-fak",            pa.int64()),
-                ("Inter-fak",            pa.int64()),
-                ("Intra-fak (%)",        pa.float64()),
-                ("Intra-inst",           pa.int64()),
-                ("Inter-inst",           pa.int64()),
-                ("Intra-inst (%)",       pa.float64()),
-                ("Total publikationer",  pa.int64()),
-            ]
-            with st.expander("Se tabel"):
-                st.dataframe(build_table(_silo_rows, _silo_schema), hide_index=True, width="stretch")
-                st.download_button(
-                    "Download (.xlsx)",
-                    data=rows_to_excel_bytes(_silo_rows, [n for n, _ in _silo_schema]),
-                    file_name=f"intra_andel_over_tid_{mode}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                for u in all_years_data[yr].get(_tab_intra_key, {})
+            })
+
+            # Hvilke kurver skal med i hvert plot?
+            _plot_levels = []
+            if mode not in ("G", "GS"):
+                _plot_levels.append(("fac",  "fac_intra_ew",  "fac_inter_ew",
+                                     "intra_pubs",      "inter_pubs",      "#122947",
+                                     None, None))
+            if "I" in mode:
+                _plot_levels.append(("inst", "inst_intra_ew", "inst_inter_ew",
+                                     "intra_inst_pubs", "inter_inst_pubs", "#4a7ca8",
+                                     "fac_inst_intra_ew", "fac_inst_inter_ew"))
+            if mode in _grp_modes:
+                _tab_cross_intra = (
+                    "fac_grp_intra_ew"  if _tab_level == "fac"  else
+                    "inst_grp_intra_ew" if _tab_level == "inst" else None
                 )
+                _tab_cross_inter = (
+                    "fac_grp_inter_ew"  if _tab_level == "fac"  else
+                    "inst_grp_inter_ew" if _tab_level == "inst" else None
+                )
+                _plot_levels.append(("grp",  "grp_intra_ew",  "grp_inter_ew",
+                                     "intra_grp_pubs",  "inter_grp_pubs",  "#39641c",
+                                     _tab_cross_intra, _tab_cross_inter))
 
+            def _render_silo_unit(filter_unit=None):
+                """Render plot + tabel. filter_unit=None → samlet."""
+                _fig = go.Figure()
+                _tbl_rows = {yr: {"År": yr} for yr in years_sorted}
+                _tbl_cols = ["År"]
 
-    # ── 3. Isolerede enheder over tid ─────────────────────────────────────────
-    if all_years_data and len(all_years_data) >= 2:
-        st.markdown("#### Er de samme enheder altid isolerede?")
-        st.markdown(
-f"""
-Enheder, der konsekvent er isolerede (ingen sampubliceringer i det valgte udsnit) 
-kan pege på strukturelle barrierer. Enheder, der kun lejlighedsvist er isolerede kan 
-afspejle dataudfald eller midlertidige forhold - og derfor viser figuren kun ender, der har været
-isolerede i **mindst to år**.
-""")
-        years_sorted = sorted(all_years_data.keys())
+                for unit_key, intra_key, inter_key, intra_abs_key, inter_abs_key, color, cross_intra_key, cross_inter_key in _plot_levels:
+                    if filter_unit is None:
+                        _intra_abs = [int(all_years_data[yr].get(intra_abs_key, 0)) for yr in years_sorted]
+                        _inter_abs = [int(all_years_data[yr].get(inter_abs_key, 0)) for yr in years_sorted]
+                    elif unit_key == _tab_level:
+                        _intra_abs = [int(all_years_data[yr].get(intra_key, {}).get(filter_unit, 0)) for yr in years_sorted]
+                        _inter_abs = [int(all_years_data[yr].get(inter_key, {}).get(filter_unit, 0)) for yr in years_sorted]
+                    elif cross_intra_key and cross_inter_key:
+                        # fx grp-niveau når tab-niveau er fac: slå op i fac_grp_intra_ew[filter_unit]
+                        _intra_abs = [int(all_years_data[yr].get(cross_intra_key, {}).get(filter_unit, {}).get("_sum", 0)
+                                    or sum(all_years_data[yr].get(cross_intra_key, {}).get(filter_unit, {}).values()))
+                                    for yr in years_sorted]
+                        _inter_abs = [int(all_years_data[yr].get(cross_inter_key, {}).get(filter_unit, {}).get("_sum", 0)
+                                    or sum(all_years_data[yr].get(cross_inter_key, {}).get(filter_unit, {}).values()))
+                                    for yr in years_sorted]
+                    else:
+                        _intra_abs = [int(all_years_data[yr].get(intra_abs_key, 0)) for yr in years_sorted]
+                        _inter_abs = [int(all_years_data[yr].get(inter_abs_key, 0)) for yr in years_sorted]
 
-        # Collect all units ever isolated
-        _all_isolated: dict[str, list] = {}
-        for yr in years_sorted:
-            for unit in all_years_data[yr].get("isolated_units", []):
-                _all_isolated.setdefault(unit, []).append(yr)
+                    _totals  = [i + x or 1 for i, x in zip(_intra_abs, _inter_abs)]
+                    _y_intra = [round(100 * i / t, 1) for i, t in zip(_intra_abs, _totals)]
+                    _y_inter = [round(100 - v, 1)     for v in _y_intra]
 
-        _persistent = {unit: yrs for unit, yrs in _all_isolated.items() if len(yrs) >= 2}
+                    _level_label = {"fac": "fakultet", "inst": "institut", "grp": "stillingsgruppe"}[unit_key]
+                    _color = color
 
-        if not _persistent:
-            st.info("Ingen enheder har været isolerede i to eller flere år.")
-        else:
-            # Sort: most-frequently isolated first
-            _iso_sorted = sorted(_persistent.items(), key=lambda x: -len(x[1]))
+                    _fig.add_trace(go.Scatter(
+                        x=years_sorted, y=_y_intra,
+                        mode="lines+markers+text",
+                        text=[f"{v}%" for v in _y_intra],
+                        textposition="top center",
+                        line=dict(color=_color, width=2),
+                        marker=dict(size=9),
+                        name=f"Intra-{_level_label} (%)",
+                    ))
+                    _fig.add_trace(go.Scatter(
+                        x=years_sorted, y=_y_inter,
+                        mode="lines+markers+text",
+                        text=[f"{v}%" for v in _y_inter],
+                        textposition="bottom center",
+                        line=dict(color=_color, width=2, dash="dot"),
+                        marker=dict(size=9),
+                        name=f"Inter-{_level_label} (%)",
+                    ))
 
-            _iso_tbl_rows = [
-            {
-                "Enhed":               unit,
-                "Antal isolerede år":  int(len(yrs)),
-                "Isoleret i år":       ", ".join(str(y) for y in sorted(yrs)),
-                "Konsekvent isoleret": "Ja" if len(yrs) == len(years_sorted) else "Nej",
-            }
-            for unit, yrs in _iso_sorted
-            ]
-            _iso_schema = [
-                ("Enhed",                pa.string()),
-                ("Antal isolerede år",   pa.int64()),
-                ("Isoleret i år",        pa.string()),
-                ("Konsekvent isoleret",  pa.string()),
-            ]
+                    _intra_col = f"Intra-{_level_label} (forfatterpar)"
+                    _inter_col = f"Inter-{_level_label} (forfatterpar)"
+                    _pct_col   = f"Intra-{_level_label} (%)"
+                    _tbl_cols += [_intra_col, _inter_col, _pct_col]
+                    for i, yr in enumerate(years_sorted):
+                        _tbl_rows[yr][_intra_col] = _intra_abs[i]
+                        _tbl_rows[yr][_inter_col] = _inter_abs[i]
+                        _tbl_rows[yr][_pct_col]   = _y_intra[i]
 
-            # Presence/absence heatmap
-            _iso_units = [r["Enhed"] for r in _iso_tbl_rows]
-            _iso_z = [
-                [1 if yr in _persistent[unit] else 0 for yr in years_sorted]
-                for unit in _iso_units
-            ]
-            _fig_iso = go.Figure(go.Heatmap(
-                z=_iso_z,
-                x=[str(yr) for yr in years_sorted],
-                y=_iso_units,
-                colorscale=[[0, "#f0f4f8"], [1, "#7A131A"]],
-                zmin=0, zmax=1,
-                text=[["Isoleret" if v else "" for v in row] for row in _iso_z],
-                texttemplate="%{text}",
-                showscale=False,
-                hovertemplate="%{y} - %{x}: %{text}<extra></extra>",
-            ))
-            _fig_iso.update_layout(
-                xaxis_title="År",
-                height=max(300, 28 * len(_iso_units)),
-                margin=dict(l=220, t=20, r=20),
+                _fig.update_layout(
+                    yaxis_title="Andel af forfatterpar (%)",
+                    yaxis=dict(range=[0, 100]),
+                    xaxis=dict(tickmode="array", tickvals=years_sorted, dtick=1),
+                    legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
+                    height=400,
+                    margin=dict(t=20, b=100),
+                )
+                _fu = filter_unit or "samlet"
+                st.plotly_chart(_fig, width="stretch",
+                    key=f"silo_unit_{_fu}_{year}_{mode}")
+
+                _tbl_schema = (
+                    [("År", pa.int64())] +
+                    [(c, pa.int64() if "forfatterpar" in c else pa.float64())
+                     for c in _tbl_cols[1:]]
+                )
+                _rows_list = [_tbl_rows[yr] for yr in years_sorted]
+                with st.expander("Se tabel"):
+                    st.dataframe(build_table(_rows_list, _tbl_schema),
+                                 hide_index=True, width="stretch")
+                    st.download_button(
+                        "Download (.xlsx)",
+                        data=rows_to_excel_bytes(_rows_list, [n for n, _ in _tbl_schema]),
+                        file_name=f"intra_over_tid_{_fu}_{year}_{mode}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"dl_silo_unit_{_fu}_{year}_{mode}",
+                    )
+
+            _tab_samlet, *_tabs_units = st.tabs(
+                ["Samlet KU"] + _tab_units
             )
-            st.plotly_chart(_fig_iso, width='stretch')
+            with _tab_samlet:
+                _render_silo_unit(filter_unit=None)
+            for unit, _tab in zip(_tab_units, _tabs_units):
+                with _tab:
+                    _render_silo_unit(filter_unit=unit)
+            
+            # ── Samlet tabel på tværs af alle enheder og år ──────────────
+            _all_rows = []
+            for yr in years_sorted:
+                for unit in _tab_units:
+                    _row = {"År": yr, _tab_label: unit}
+                    for unit_key, intra_key, inter_key, intra_abs_key, inter_abs_key, color, cross_intra_key, cross_inter_key in _plot_levels:
+                        if unit_key == _tab_level:
+                            _i = int(all_years_data[yr].get(intra_key, {}).get(unit, 0))
+                            _x = int(all_years_data[yr].get(inter_key, {}).get(unit, 0))
+                        else:
+                            _i = int(all_years_data[yr].get(intra_abs_key, 0))
+                            _x = int(all_years_data[yr].get(inter_abs_key, 0))
+                        _tot = _i + _x or 1
+                        _level_label = {"fac": "fakultet", "inst": "institut", "grp": "stillingsgruppe"}[unit_key]
+                        _row[f"Intra-{_level_label} (forfatterpar)"] = _i
+                        _row[f"Inter-{_level_label} (forfatterpar)"] = _x
+                        _row[f"Intra-{_level_label} (%)"]            = round(100 * _i / _tot, 1)
+                    _all_rows.append(_row)
 
-            with st.expander("Se tabel"):
-                st.dataframe(build_table(_iso_tbl_rows, _iso_schema), hide_index=True, width="stretch")
-                st.download_button(
-                    "Download (.xlsx)",
-                    data=rows_to_excel_bytes(_iso_tbl_rows, [n for n, _ in _iso_schema]),
-                    file_name=f"isolerede_enheder_over_tid_{mode}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
+            _all_cols = [("År", pa.int64()), (_tab_label, pa.string())] + [
+                (c, pa.int64() if "forfatterpar" in c else pa.float64())
+                for c in _all_rows[0] if c not in ("År", _tab_label)
+            ] if _all_rows else []
 
-
-
+            if _all_rows:
+                with st.expander("Se samlet tabel"):
+                    st.dataframe(build_table(_all_rows, _all_cols), hide_index=True, width="stretch")
+                    st.download_button(
+                        "Download (.xlsx)",
+                        data=rows_to_excel_bytes(_all_rows, [n for n, _ in _all_cols]),
+                        file_name=f"intra_over_tid_samlet_{year}_{mode}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"dl_silo_samlet_{year}_{mode}",
+                    )
 
 def render_tab_fakulteter(year, mode, fac_tot_size, fac_avg_size, edges_keep, node_meta, all_years_data=None, fac_ew=None, faculty_base_colors=None, size_map=None):
     if mode not in ("FIG", "FI", "FG", "F", "FS"):
@@ -3413,7 +3708,7 @@ def render_tab_institutter(year, mode, inst_tot_size, inst_avg_size, institut_fa
     if size_map is None:
         size_map = inst_tot_size
     
-    st.subheader("Institutternes forfatterbidrag")
+    st.subheader("Institutter")
 
     _sorted_tot  = sorted(inst_tot_size.items(), key=lambda x: -x[1])
     _grand_tot   = sum(inst_tot_size.values()) or 1
@@ -3425,14 +3720,14 @@ def render_tab_institutter(year, mode, inst_tot_size, inst_avg_size, institut_fa
     _avg_bot, _avg_bot_val = _sorted_avg[-1]
 
     st.markdown(f"""
-Denne sektion kortlægger institutternes sampubliceringsmønster med fokus på
-forfatterbidrag, kantvægte og forholdet mellem størrelse og sampubliceringsaktivitet.
+Denne fane viser, hvor meget hvert institut bidrager til KU's sampubliceringsaktivitet — 
+både i absolutte tal og relativt til instituttets størrelse.
 
 ##### Institutternes forfatterbidrag i {year}
 
-I det valgte udsnit har **{_top_inst}** flest forfatterbidrag **{int(_top_val):,}** 
-({_top_share:.1f}% af samtlige bidrag), mens **{_bot_inst}** har færrest med **{int(_bot_val):,}**. 
-Målt på gennemsnitligt forfatterbidrag per node topper **{_avg_top}** (**{_avg_top_val:,.1f}**), 
+**{_top_inst}** tegner sig for flest forfatterbidrag i det valgte udsnit med **{int(_top_val):,}** 
+({_top_share:.1f}% af samtlige bidrag), mens **{_bot_inst}** bidrager mindst med **{int(_bot_val):,}**.
+Ser man på forfatterbidrag per forsker, er **{_avg_top}** mest aktiv (**{_avg_top_val:,.1f}**),
 mens **{_avg_bot}** ligger lavest (**{_avg_bot_val:,.1f}**).
     """)
 
@@ -3447,11 +3742,28 @@ mens **{_avg_bot}** ligger lavest (**{_avg_bot_val:,.1f}**).
         for fac, insts in _insts_by_fac.items():
             insts_sorted = sorted(insts)
             k = max(1, len(insts_sorted))
+            base = faculty_base_colors.get(fac, "#122947")
             for rank, inst in enumerate(insts_sorted):
-                factor = 0.9 + 0.3 * (rank / max(1, k - 1))
-                _inst_color_map[inst] = adjust_color(
-                    faculty_base_colors.get(fac, "#122947"), factor
-                )
+                t = rank / max(1, k - 1)  # 0.0 → 1.0
+                lf = 0.5 + 1.8 * t        # lyshed: 0.6 (mørk) → 1.4 (lys)
+                sf = 1.3 - 0.7 * t        # mætning: 1.2 (mættet) → 0.8 (dæmpet)
+                _inst_color_map[inst] = adjust_color(base, lf, sf)
+
+    # ── Lokalt fakultetsfilter ────────────────────────────────────────────
+    _all_facs_in_tab = sorted({
+        institut_fakultets_map.get(inst, "")
+        for inst in inst_tot_size
+        if institut_fakultets_map.get(inst, "")
+    })
+    _fac_filter = st.multiselect(
+        "Filtrer på fakultet",
+        options=_all_facs_in_tab,
+        default=[],
+        key=f"inst_tab_fac_filter_{year}_{mode}",
+        placeholder="Alle fakulteter",
+    )
+    def _fac_ok(inst):
+        return not _fac_filter or institut_fakultets_map.get(inst, "") in _fac_filter
 
     tab_it, tab_ia = st.tabs(["Samlet forfatterbidrag", "Gennemsnitligt forfatterbidrag"])
     with tab_it:
@@ -3460,7 +3772,7 @@ mens **{_avg_bot}** ligger lavest (**{_avg_bot_val:,.1f}**).
         inst_total_rows = [
             {"Fakultet": institut_fakultets_map.get(inst, ""), "Institut": inst,
             "Samlet forfatterbidrag": int(inst_tot_size[inst]), "mode": mode}
-            for inst in sorted(inst_tot_size, key=lambda i: -inst_tot_size[i])
+            for inst in sorted(inst_tot_size, key=lambda i: -inst_tot_size[i]) if _fac_ok(inst)
         ]
         _insts   = [r["Institut"] for r in inst_total_rows]
         _tots    = [r["Samlet forfatterbidrag"] for r in inst_total_rows]
@@ -3488,7 +3800,7 @@ mens **{_avg_bot}** ligger lavest (**{_avg_bot_val:,.1f}**).
              "Andel (%)": round(100 * inst_tot_size[inst] / _tot_g, 1),
              "Gns. forfatterbidrag": round(inst_avg_size.get(inst, 0), 1),
              "mode": mode}
-            for inst in sorted(inst_tot_size, key=lambda i: -inst_tot_size[i])
+            for inst in sorted(inst_avg_size, key=lambda i: -inst_avg_size[i]) if _fac_ok(inst)
         ]
         _inst_summary_schema = [
             ("Fakultet", pa.string()),
@@ -3504,8 +3816,8 @@ mens **{_avg_bot}** ligger lavest (**{_avg_bot_val:,.1f}**).
         st.markdown("**Gennemsnitligt forfatterbidrag per node**")
         inst_avg_rows = [
             {"Fakultet": institut_fakultets_map.get(inst, ""), "Institut": inst,
-            "Gennemsnitligt forfatterbidrag": int(inst_avg_size[inst]), "mode": mode}
-            for inst in sorted(inst_avg_size, key=lambda i: -inst_avg_size[i])
+            "Gennemsnitligt forfatterbidrag": round(inst_avg_size[inst], 1), "mode": mode}
+            for inst in sorted(inst_avg_size, key=lambda i: -inst_avg_size[i]) if _fac_ok(inst)
         ]
         _avgs   = [r["Gennemsnitligt forfatterbidrag"] for r in inst_avg_rows]
         _inst_avg_colors = [_inst_color_map.get(r["Institut"], "#122947") for r in inst_avg_rows]
@@ -3529,7 +3841,7 @@ mens **{_avg_bot}** ligger lavest (**{_avg_bot_val:,.1f}**).
             file_name=f"forfatterbidrag_institutter_total_{year}_{mode}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",)
 
-    _insts_in_data = sorted({i for s in (all_years_data or {}).values() for i in s.get("inst_tot", {})})
+    _insts_in_data = sorted({i for s in (all_years_data or {}).values() for i in s.get("inst_tot", {}) if _fac_ok(i)})
     _render_year_comparison(
         all_years_data,
         series=[(inst, "inst_tot", inst) for inst in _insts_in_data],
@@ -3537,38 +3849,132 @@ mens **{_avg_bot}** ligger lavest (**{_avg_bot_val:,.1f}**).
         colors = _inst_color_map
     )
 
-    st.subheader("Kantvægt fordelt på institut")
-    
-    if inst_ew:
-        _grand_ew   = sum(inst_ew.values()) or 1
-        _ew_sorted  = sorted(inst_ew.items(), key=lambda x: -x[1])
+    st.subheader("Sampubliceringsaktivitet per institut")
+    _inst_ew_filtered  = {k: v for k, v in (inst_ew or {}).items() if _fac_ok(k)}
+    _inst_tot_filtered = {k: v for k, v in inst_tot_size.items() if _fac_ok(k)}
+    _edges_filtered    = [(u, v, w, *r) for u, v, w, *r in edges_keep
+                          if _fac_ok(node_meta.get(u, {}).get("inst", ""))
+                          or _fac_ok(node_meta.get(v, {}).get("inst", ""))]
+
+    if _inst_ew_filtered:
+        _grand_ew   = sum(_inst_ew_filtered.values()) or 1
+        _ew_sorted  = sorted(_inst_ew_filtered.items(), key=lambda x: -x[1])
         _ew_top, _ew_top_val = _ew_sorted[0]
         _ew_share   = 100 * _ew_top_val / _grand_ew
+        _ew_top_val_fmt = f"{_ew_top_val:,.1f}"
         _ratio_sorted = sorted(
-            [(k, inst_ew[k] / inst_tot_size[k]) for k in inst_tot_size if inst_tot_size.get(k) and inst_ew.get(k)],
+            [(k, _inst_ew_filtered[k] / _inst_tot_filtered[k]) for k in _inst_tot_filtered if _inst_tot_filtered.get(k) and _inst_ew_filtered.get(k)],
             key=lambda x: -x[1],
         )
         _rat_top, _rat_top_val = _ratio_sorted[0]
         _rat_bot, _rat_bot_val = _ratio_sorted[-1]
         st.markdown(
-            f"Hver kant er fordelt ligeligt mellem dens to endepunkter. "
-            f"**{_ew_top}** modtager den største andel af sampubliceringerne "
-            f"({_ew_share:.1f}% af den samlede kantvægt). "
-            f"Relativt til størrelse - kantvægt per forfatterbidrag - er **{_rat_top}** "
-            f"mest sampublicerende ({_rat_top_val:.3f}), mens **{_rat_bot}** er mindst ({_rat_bot_val:.3f})."
-        )
+f"""Hver kant er fordelt ligeligt mellem dens to endepunkter. **{_ew_top}** modtager den 
+største andel af sampubliceringerne ({_ew_top_val_fmt} forfatterpar, {_ew_share:.1f}% 
+af den samlede kantvægt). Relativt til størrelse - kantvægt per forfatterbidrag - 
+er **{_rat_top}** mest sampublicerende ({_rat_top_val:.3f}), mens **{_rat_bot}** er 
+mindst ({_rat_bot_val:.3f}).
+
+Alle samarbejder, hvor mindst ét institut er fra det valgte fakultet, vises.
+"""
+)
     else:
         st.markdown("Hver kant har to noder - hver publikation (kantvægten) er fordelt ligeligt mellem de tilhørende noder.")
 
-    _render_org_bar(edges_keep, node_meta, "inst", "Institut", color_map=_inst_color_map, size_map=inst_tot_size)
+    _render_org_bar(_edges_filtered, node_meta, "inst", "Institut", color_map=_inst_color_map, size_map=_inst_tot_filtered)
 
     if inst_ew is not None:
-        _render_share_comparison(inst_tot_size, inst_ew, "Institut")
+        _render_share_comparison(_inst_tot_filtered, _inst_ew_filtered, "Institut")
+
+    if edges_keep and mode in ("FI", "FIG", "IG"):
+        st.subheader("Institutternes inter-fakultet samarbejde")
+        
+        st.markdown(
+            """Figuren viser, hvor stor en andel af hvert instituts sampubliceringer der involverer 
+            et institut fra et andet fakultet. Institutter med en høj andel samarbejder i særlig 
+            grad på tværs af fakultetsgrænser.
+            
+            Vær opmærksom på, hvilke filtre der er valgte i sidepanelet."""
+        )
+
+        _inst_intra_ew: dict[str, float] = {}
+        _inst_inter_ew: dict[str, float] = {}
+
+        for u, v, w, *_ in edges_keep:
+            mu = node_meta.get(u, {})
+            mv = node_meta.get(v, {})
+            fac_u, fac_v   = mu.get("fac", ""), mv.get("fac", "")
+            inst_u, inst_v = mu.get("inst", ""), mv.get("inst", "")
+            cross = fac_u != fac_v
+            for inst in [inst_u, inst_v]:
+                if not inst:
+                    continue
+                if cross:
+                    _inst_inter_ew[inst] = _inst_inter_ew.get(inst, 0.0) + w / 2
+                else:
+                    _inst_intra_ew[inst] = _inst_intra_ew.get(inst, 0.0) + w / 2
+
+        _all_insts = sorted(set(_inst_intra_ew) | set(_inst_inter_ew))
+        if _all_insts:
+            _inter_rows = []
+            for inst in _all_insts:
+                intra = _inst_intra_ew.get(inst, 0.0)
+                inter = _inst_inter_ew.get(inst, 0.0)
+                total = intra + inter
+                _inter_rows.append({
+                    "Institut":              inst,
+                    "Fakultet":              institut_fakultets_map.get(inst, ""),
+                    "Inter-fakultet (%)":    round(100 * inter / total, 1) if total else 0.0,
+                    "Inter-fakultet (vægt)": round(inter, 1),
+                    "Total kantvægt":        round(total, 1),
+                })
+
+            if _fac_filter:
+                _inter_rows = [r for r in _inter_rows if r["Fakultet"] in _fac_filter]
+
+            _inter_rows.sort(key=lambda r: -r["Inter-fakultet (%)"])
+
+            _fig_inter = go.Figure(go.Bar(
+                y=[r["Institut"] for r in _inter_rows],
+                x=[r["Inter-fakultet (%)"] for r in _inter_rows],
+                orientation="h",
+                marker_color=[_inst_color_map.get(r["Institut"], "#122947") for r in _inter_rows],
+                text=[f"{r['Inter-fakultet (%)']:.1f}%  ({r['Inter-fakultet (vægt)']:.1f} fp)" for r in _inter_rows],
+                textposition="inside",
+            ))
+            _fig_inter.update_layout(
+                xaxis_title="Andel inter-fakultet sampubliceringer (%)",
+                xaxis_range=[0, 100],
+                height=max(400, 28 * len(_inter_rows)),
+                margin=dict(l=200, r=80, t=10),
+                yaxis=dict(autorange="reversed"),
+            )
+            st.plotly_chart(_fig_inter, width="stretch")
+
+            _inter_schema = [
+                ("Institut",              pa.string()),
+                ("Fakultet",              pa.string()),
+                ("Inter-fakultet (%)",    pa.float64()),
+                ("Inter-fakultet (vægt)", pa.float64()),
+                ("Total kantvægt",        pa.float64()),
+            ]
+            with st.expander("Se tabel"):
+                st.dataframe(build_table(_inter_rows, _inter_schema), hide_index=True, width="stretch")
+                st.download_button(
+                    "Download (.xlsx)",
+                    data=rows_to_excel_bytes(_inter_rows, [n for n, _ in _inter_schema]),
+                    file_name=f"inter_fakultet_institutter_{year}_{mode}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"dl_inter_fak_inst_{year}_{mode}",
+                )
+
+
+
 
 def render_pos_chart(pos_counts: dict, tab_key: str, year: int, mode: str):
     stillinger_sorted = sorted(pos_counts.keys(), key=lambda g: HIERARKI.get(g, 999))
     if not stillinger_sorted:
-        st.info("Ingen data i det valgte udsnit.")
+        st.error("Ingen data i det valgte udsnit.")
         return
     _pos_colors = ku_color_sequence(3)
     fig = go.Figure()
@@ -3625,6 +4031,107 @@ def render_tab_stillingsgrupper(year, mode, all_groups, grp_tot_size, grp_avg_si
                                  node_meta=None, forfatterpositioner=None,
                                  inst_to_fac = None):
     st.subheader("Stillingsgruppernes forfatterbidrag")
+    st.markdown(
+f""" Den her sektion fokuserer på, hvordan stillingsgrupperne publicerer i det valgte udsnit.
+Først kortlægges stillinggruppernes forfatterbidrag og publikationer for til sidst at 
+zoome ind på, hvordan de forskellige stillingsgrupper placerer sig i publikationernes 
+forfatterrækker."""
+)
+
+     # ── Lokale filtre ─────────────────────────────────────────────────────
+    _fac_to_insts: dict[str, list] = {}
+    _facs_only: list = []
+    if node_meta:
+        for m in node_meta.values():
+            f, i = m.get("fac", ""), m.get("inst", "")
+            if f and i:
+                if i not in _fac_to_insts.setdefault(f, []):
+                    _fac_to_insts[f].append(i)
+            elif f:
+                if f not in _facs_only:
+                    _facs_only.append(f)
+    _all_facs_grp = sorted(set(list(_fac_to_insts.keys()) + _facs_only))
+    _show_local_filter = bool(_all_facs_grp)
+    _show_inst_filter  = bool(_fac_to_insts)
+
+    _grp_fac_filter = st.multiselect(
+        "Filtrer på fakultet",
+        options=_all_facs_grp if _show_local_filter else [],
+        default=[],
+        key=f"grp_tab_fac_filter_{year}_{mode}_v2",
+        placeholder="Alle fakulteter" if _show_local_filter else "Ikke tilgængeligt i denne mode",
+        disabled=not _show_local_filter,
+    )
+    if _show_inst_filter:
+        _inst_opts = sorted({
+            i
+            for f, insts in _fac_to_insts.items()
+            for i in insts
+            if not _grp_fac_filter or f in _grp_fac_filter
+        })
+        _grp_inst_filter = st.multiselect(
+            "Filtrer på institut",
+            options=_inst_opts,
+            default=[],
+            key=f"grp_tab_inst_filter_{year}_{mode}_v2",
+            placeholder="Alle institutter",
+        )
+    else:
+        _grp_inst_filter = []
+
+    # Institutter afhænger af valgte fakulteter
+    _inst_opts = sorted({
+        i
+        for f, insts in _fac_to_insts.items()
+        for i in insts
+        if not _grp_fac_filter or f in _grp_fac_filter
+    })
+
+    def _grp_node_ok(nid):
+        m = (node_meta or {}).get(nid, {})
+        if _grp_fac_filter and m.get("fac", "") not in _grp_fac_filter:
+            return False
+        if _grp_inst_filter and m.get("inst", "") not in _grp_inst_filter:
+            return False
+        return True
+
+    # Filtrerede edges og størrelser
+    _edges_grp = (
+        [(u, v, w, *r) for u, v, w, *r in (edges_keep or [])
+         if _grp_node_ok(u) or _grp_node_ok(v)]
+        if (_grp_fac_filter or _grp_inst_filter) else (edges_keep or [])
+    )
+    _nodes_grp = {
+        nid for edge in _edges_grp for nid in (edge[0], edge[1])
+    }
+    _grp_tot_filtered: dict[str, float] = {}
+    _grp_avg_filtered: dict[str, float] = {}
+    if _grp_fac_filter or _grp_inst_filter:
+        _grp_counts: dict[str, list] = {}
+        for nid in _nodes_grp:
+            m = (node_meta or {}).get(nid, {})
+            g = m.get("grp", "")
+            if not g: continue
+            if not _grp_node_ok(nid): continue
+            _grp_counts.setdefault(g, []).append(m.get("size", 0))
+        for g, sizes in _grp_counts.items():
+            _grp_tot_filtered[g] = sum(sizes)
+            _grp_avg_filtered[g] = sum(sizes) / len(sizes) if sizes else 0
+        _grp_ew_filtered: dict[str, float] = {}
+        for u, v, w, *_ in _edges_grp:
+            for n in (u, v):
+                if not _grp_node_ok(n): continue
+                g = (node_meta or {}).get(n, {}).get("grp", "")
+                if g:
+                    _grp_ew_filtered[g] = _grp_ew_filtered.get(g, 0.0) + w / 2
+    else:
+        _grp_tot_filtered = grp_tot_size
+        _grp_avg_filtered = grp_avg_size
+        _grp_ew_filtered  = grp_ew or {}
+    
+    grp_tot_size = _grp_tot_filtered
+    grp_avg_size = _grp_avg_filtered
+    grp_ew       = _grp_ew_filtered
 
     if grp_tot_size:
         _grand_tot   = sum(grp_tot_size.values()) or 1
@@ -3633,24 +4140,25 @@ def render_tab_stillingsgrupper(year, mode, all_groups, grp_tot_size, grp_avg_si
         _top_share   = 100 * _top_val / _grand_tot
         _avg_top, _avg_top_val = max(grp_avg_size.items(), key=lambda x: x[1])
         _avg_bot, _avg_bot_val = min(grp_avg_size.items(), key=lambda x: x[1])
-        st.markdown(
-f""" Den her sektion fokuserer på, hvordan stillingsgrupperne publicerer i det valgte udsnit.
-Først kortlægges stillinggruppernes forfatterbidrag og publikationer for til sidst at 
-zoome ind på, hvordan de forskellige stillingsgrupper placerer sig i publikationernes 
-forfatterrækker.
+        
 
+        st.markdown(
+f"""
 ##### Stillinggruppernes forfatterbidrag i {year}
 
 Generelt udgør **{str(_top_grp).lower()}er** flest forfatterbidrag med **{int(_top_val):,}** 
 ({_top_share:.1f}% af samtlige bidrag i udsnittet), mens **{_bot_grp}** har færrest med 
-**{int(_bot_val):,}** forfatterbidrag. Målt på gennemsnitligt forfatterbidrag per node topper **{str(_avg_top).lower()}er** 
-(**{_avg_top_val:,.1f}**), mens **{str(_avg_bot)}er** ligger lavest (**{_avg_bot_val:,.1f}**).
+**{int(_bot_val):,}** forfatterbidrag. Det samlede tal afspejler gruppens størrelse — en stor 
+gruppe vil naturligt dominere. Målt på gennemsnitligt forfatterbidrag per node — som 
+normaliserer for gruppestørrelse og dermed viser hvor produktiv den typiske node er — topper 
+**{str(_avg_top).lower()}er** (**{_avg_top_val:,.1f}**), mens **{str(_avg_bot)}er** ligger 
+lavest (**{_avg_bot_val:,.1f}**).
 """)
 
     # ── Forfatterbidrag - sorted by hierarchy ────────────────────────────────
     _grps_hier = sorted(grp_tot_size.keys(), key=lambda g: HIERARKI.get(g, 999))
     _tots_hier = [int(grp_tot_size[g]) for g in _grps_hier]
-    _avgs_hier = [int(grp_avg_size.get(g, 0)) for g in _grps_hier]
+    _avgs_hier = [round(grp_avg_size.get(g, 0), 1) for g in _grps_hier]
     _tot_grand = sum(_tots_hier) or 1
 
     grp_colors = stillingsgruppe_colors({})
@@ -3676,7 +4184,7 @@ Generelt udgør **{str(_top_grp).lower()}er** flest forfatterbidrag med **{int(_
         _fig_avg = go.Figure(go.Bar(
             y=_grps_hier, x=_avgs_hier, orientation="h",
             marker_color=[grp_colors.get(g, "#122947") for g in _grps_hier],
-            text=[f"{v:,}" for v in _avgs_hier],
+            text=[f"{v:.1f}" for v in _avgs_hier],
             textposition="inside",
         ))
         _fig_avg.update_layout(
@@ -3763,30 +4271,28 @@ Generelt udgør **{str(_top_grp).lower()}er** flest forfatterbidrag med **{int(_
                     counts[grp][k] += v
         return {grp: dict(c) for grp, c in counts.items()}
         
-    active_facs  = list(selected_facs)  if selected_facs  else [f for f in FAC_ORDER if f in yr_data.get("fac", {})]
-    active_insts = list(selected_insts) if selected_insts else sorted(yr_data.get("inst", {}).keys())
-
-    # Filtrer institutter til valgte fakulteter hvis inst_to_fac er tilgængelig
+    active_facs  = (
+        _grp_fac_filter if _grp_fac_filter
+        else list(selected_facs) if selected_facs
+        else [f for f in FAC_ORDER if f in yr_data.get("fac", {})]
+    )
+    active_insts = (
+        _grp_inst_filter if _grp_inst_filter
+        else list(selected_insts) if selected_insts
+        else sorted(yr_data.get("inst", {}).keys())
+    )
+    # Filtrer institutter til valgte fakulteter
     if mode in ("FI", "FIG") and inst_to_fac:
         fac_set = set(active_facs)
         active_insts = [i for i in active_insts if inst_to_fac.get(i) in fac_set]
-        extra_tabs = active_insts
-        level = "inst"
+        pos_data = _merge_pos(yr_data.get("inst", {}), active_insts)
     elif mode in ("F", "FS", "FG"):
-        extra_tabs = active_facs
-        level = "fac"
+        pos_data = _merge_pos(yr_data.get("fac", {}), active_facs)
     else:
-        extra_tabs = active_insts
-        level = "inst"
+        pos_data = _merge_pos(yr_data.get("inst", {}), active_insts)
 
-    _tab_ku, *_tabs_extra = st.tabs(["Samlet KU"] + extra_tabs)
 
-    with _tab_ku:
-        render_pos_chart({grp: dict(c) for grp, c in yr_data.get("ku", {}).items()}, "ku", year, mode)
-
-    for org, tab in zip(extra_tabs, _tabs_extra):
-        with tab:
-            render_pos_chart(_merge_pos(yr_data.get(level, {}), [org]), org, year, mode)
+    render_pos_chart(pos_data, "ku", year, mode)
     
 
 
@@ -3794,31 +4300,38 @@ Generelt udgør **{str(_top_grp).lower()}er** flest forfatterbidrag med **{int(_
 def render_tab_centralitet(year, mode, faculty_wd_sorted, faculty_bs_sorted,
                             inst_wd_sorted, inst_bs_sorted,
                             grp_wd_sorted, grp_bs_sorted, node_meta,
-                            grp_node_wd_sorted=None, grp_node_bs_sorted=None):
-    st.subheader("Centralitet for udsnittet")
+                            grp_node_wd_sorted=None, grp_node_bs_sorted=None,
+                            faculty_base_colors=None, grp_colors=None):
+    st.subheader("Nøgleaktører i sampubliceringsnetværket")
     
     st.markdown(
 f""" 
-**Centralitet** er et mål for, hvor *vigtige* noderne er i det valgte udsnit af
-sampubliceringsnetværket. For hvert aggregationsniveau vises to mål nedenfor: 
+Denne fane viser, hvilke enheder der spiller den største rolle i sampubliceringsnetværket - både
+hvem der samarbejder mest, og hvem der binder forskellige enheder sammen. 
 
-**Weighted degree** er den samlede vægt af alle publikationer, som et fakultet, institut
-eller stillingsgruppe indgår i: 
+**Samlet samarbejdsomfang** (centralitet) opgør, hvor mange forfatterpar en enhed samlet set 
+indgår i. Det er et mål for aktivitet - ikke nødvendigvis strategisk position. Bemærk, at dette
+ikke er det samme som, hvor meget to enheder samarbejder med hinanden - det vises under fanen 
+*Samarbejdsmønstre*.
 
-- En høj værdi betyder, at noden deltager i mange eller store sampublikationer.
-- Det er et mål for aktivitet, ikke nødvendigvis strategisk position.
+**Brobyggerrolle** (*betweenness* centralitet) viser, hvilke enheder der fungerer som forbindelsesled mellem grupper, der 
+ellers ikke samarbejder direkte. En enhed men en høj brobyggerrolle er strukturel vigtig, da
+den binder netværket sammen og skaber forbindelser på tværs af grupper, der ellers ville være
+adskilte
+""")
 
-**Betweenness centralitet (brobyggerrolle)** måler, hvor ofte en node ligger på den
-*korteste sti* mellem to andre noder. 
+    if SVG_CENTRALITET:
+        st.markdown(f'<div style="max-width:800px;">{SVG_CENTRALITET}</div>', unsafe_allow_html=True)
+        st.caption("Illustration af de to centralitetsmål. En mørkerød node markerer enheden med den højeste værdi i hvert mål.")
 
-- En høj værdi betyder, at noden fungerer som bro mellem grupper, der ellers ikke er
-direkte forbundne.
-- Det indikerer strukturel betydning; noder, der binder netværket sammen og skaber 
-forbindelser på tværs.
+    st.markdown(
+"""
+Måske lidt tekst her, der fortæller, at man for overskuelighedens skyld kan vælge de nøgleaktører, som man vil fokusere på,
+nedenfor. XX
 """)
 
 
-    def _cent_charts(label_key, wd_sorted, bs_sorted, extra_col=None, extra_map=None):
+    def _cent_charts(label_key, wd_sorted, bs_sorted, extra_col=None, extra_map=None, color_map=None):
         """Render bar charts + table for one centralitet level."""
         if not wd_sorted:
             return
@@ -3829,11 +4342,12 @@ forbindelser på tværs.
         # Weighted degree bar
         st.subheader(f"{label_key}")
 
-        tab_weg, tab_bet = st.tabs(["Weighted degree", "Betweenness centralitet"])
+        #tab_weg, tab_bet = st.tabs(["Weighted degree", "Betweenness centralitet"])
+        tab_weg, tab_bet = st.tabs(["Samlet samarbejdsomfang", "Brobyggerrolle"])
         with tab_weg:
             _fig_wd = go.Figure(go.Bar(
                 y=keys, x=[wd_map[k] for k in keys], orientation="h",
-                marker_color="#122947",
+                marker_color=[color_map.get(k, "#122947") for k in keys] if color_map else "#122947",
                 text=[f"{wd_map[k]:,.1f}" for k in keys], textposition="inside",
             ))
             _fig_wd.update_layout(
@@ -3851,7 +4365,7 @@ forbindelser på tværs.
                     y=_bs_sorted_keys,
                     x=[bs_map.get(k, 0) for k in _bs_sorted_keys],
                     orientation="h",
-                    marker_color="#122947",
+                    marker_color=[color_map.get(k, "#122947") for k in _bs_sorted_keys] if color_map else "#122947",
                     text=[f"{bs_map.get(k,0):.4f}" for k in _bs_sorted_keys],
                     textposition="inside",
                 ))
@@ -3862,17 +4376,54 @@ forbindelser på tværs.
                 )
                 st.plotly_chart(_fig_bs, width='stretch')
 
+        if bs_map and len(keys) >= 4:
+            _n = max(len(keys) - 1, 1)
+            _wd_max = max((v for _, v in wd_sorted), default=1) or 1
+            _bs_max = max((v for _, v in bs_map.items()), default=1) or 1
+            _wd_norm = {k: v / _wd_max for k, v in wd_sorted}
+            _bs_norm = {k: v / _bs_max for k, v in bs_map.items()}
+            _rank_diff = {k: _bs_norm[k] - _wd_norm[k] for k in keys}
+
+            _biggest_broker = max(keys, key=lambda k: _rank_diff[k])
+            _biggest_active = min(keys, key=lambda k: _rank_diff[k])
+
+            if abs(_rank_diff[_biggest_broker]) >= 0.05 or abs(_rank_diff[_biggest_active]) >= 0.05:
+                if _rank_diff[_biggest_broker] >= 0.05:
+                    st.markdown(
+f"""
+##### Størst forskel mellem samarbejdsomfang og brobyggerrolle (normaliseret)
+**{_biggest_broker}** har en relativt høj brobyggerrolle sammenlignet med sit samlede samarbejdsomfang — 
+enheden fungerer som forbindelsesled på tværs af grupper, uden nødvendigvis at være den mest aktive samarbejdspartner."""
+                        )
+                if _rank_diff[_biggest_active] <= -0.05:
+                    st.markdown(
+f"""**{_biggest_active}** har et højt samlet samarbejdsomfang, med en relativt lav brobyggerrolle — 
+enheden samarbejder meget, men primært inden for sin egen gruppe."""
+                        )
+            else:
+                st.markdown(
+"""De to mål følger hinanden tæt — der er ingen enheder, der skiller sig markant ud ved at 
+have en væsentligt højere brobyggerrolle end samarbejdsomfang eller omvendt.""")
+
         # Full table
         _rows = []
+        _has_norm = bs_map and len(keys) >= 4
         for k in keys:
-            row = {label_key: k, "Weighted degree": float(wd_map.get(k, 0)),
-                   "Betweenness": float(bs_map.get(k, 0))}
+            row = {label_key: k, "Samlet samarbejdsomfang": float(wd_map.get(k, 0)),
+                   "Brobyggerrolle": float(bs_map.get(k, 0))}
             if extra_col and extra_map:
                 row[extra_col] = extra_map.get(k, "")
+            if _has_norm:
+                row["Samarbejdsomfang (normaliseret)"] = round(_wd_norm.get(k, 0), 3)
+                row["Brobyggerrolle (normaliseret)"]   = round(_bs_norm.get(k, 0), 3)
+                row["Brobygger vs. aktivitet (+ = mere brobygger)"] = round(_rank_diff.get(k, 0), 3)
             _rows.append(row)
         _schema = ([(label_key, pa.string())] +
-                   ([( extra_col, pa.string())] if extra_col else []) +
-                   [("Weighted degree", pa.float64()), ("Betweenness", pa.float64())])
+                   ([(extra_col, pa.string())] if extra_col else []) +
+                   [("Samlet samarbejdsomfang", pa.float64()), ("Brobyggerrolle", pa.float64())] +
+                   ([("Samarbejdsomfang (normaliseret)", pa.float64()),
+                     ("Brobyggerrolle (normaliseret)",   pa.float64()),
+                     ("Brobygger vs. aktivitet (+ = mere brobygger)", pa.float64())] if _has_norm else []))
         with st.expander(f"Se tabel"):
             st.dataframe(build_table(_rows, _schema), width="stretch", hide_index=True)
             st.download_button("Download (.xlsx)",
@@ -3880,37 +4431,130 @@ forbindelser på tværs.
                                file_name=f"centralitet_{label_key.lower()}_{year}_{mode}.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",)
 
+    _available = []
     if faculty_wd_sorted:
-        _cent_charts("Fakulteter", faculty_wd_sorted, faculty_bs_sorted)
-
+        _available.append("Fakulteter")
     if inst_wd_sorted:
-        _inst_to_fac = {m.get("inst"): m.get("fac") for m in node_meta.values() if m.get("inst")}
+        _available.append("Institutter")
+    if grp_wd_sorted:
+        _available.append("Stillingsgrupper (aggregeret)")
+    if grp_node_wd_sorted:
+        _available.append("Stillingsgrupper (node-niveau)")
+
+    if not _available:
+        st.error("Ingen centralitetsdata tilgængelig for det valgte udsnit.")
+        return
+
+    _state_key = f"cent_level_filter_{mode}"
+    if _state_key not in st.session_state:
+        st.session_state[_state_key] = _available
+    # Behold kun valg der stadig er tilgængelige i denne mode
+    _default = [v for v in st.session_state[_state_key] if v in _available] or _available
+    _selected = st.multiselect(
+        "Vis nøgleaktører for:",
+        options=_available,
+        default=_default,
+        key=f"cent_level_filter_{year}_{mode}",
+        on_change=lambda: st.session_state.update(
+            {_state_key: st.session_state[f"cent_level_filter_{year}_{mode}"]}
+        ),
+    )
+
+    if not _selected:
+        st.error("Vælg mindst ét niveau ovenfor.")
+        return
+
+    _inst_to_fac = {m.get("inst"): m.get("fac") for m in node_meta.values() if m.get("inst")}
+
+    # Byg institut-farvekort samme metode som render_tab_institutter
+    _inst_color_map = {}
+    if faculty_base_colors:
+        _insts_by_fac: dict[str, list] = {}
+        for m in node_meta.values():
+            if m.get("inst") and m.get("fac"):
+                _insts_by_fac.setdefault(m["fac"], [])
+                if m["inst"] not in _insts_by_fac[m["fac"]]:
+                    _insts_by_fac[m["fac"]].append(m["inst"])
+        for fac, insts in _insts_by_fac.items():
+            insts_sorted = sorted(insts)
+            k = max(1, len(insts_sorted))
+            base = faculty_base_colors.get(fac, "#122947")
+            for rank, inst in enumerate(insts_sorted):
+                t = rank / max(1, k - 1)
+                lf = 0.5 + 1.8 * t
+                sf = 1.3 - 0.7 * t
+                _inst_color_map[inst] = adjust_color(base, lf, sf)
+
+    if "Fakulteter" in _selected:
+        _cent_charts("Fakulteter", faculty_wd_sorted, faculty_bs_sorted,
+                     color_map=faculty_base_colors)
+
+    if "Institutter" in _selected:
         _cent_charts("Institutter", inst_wd_sorted, inst_bs_sorted,
-                     extra_col="Fakultet", extra_map=_inst_to_fac)
+                     extra_col="Fakultet", extra_map=_inst_to_fac,
+                     color_map=_inst_color_map)
 
-    # In multi-level modes (FIG, FI, FG, IG …) show node-level compound labels
-    # so "Lektor | Matematik | SCIENCE" appears as a separate bar.
-    # In pure G / GS mode, keep the aggregated-by-group bars.
-    if mode in ("G", "GS"):
-        if grp_wd_sorted:
-            _cent_charts("Stillingsgrupper", grp_wd_sorted, grp_bs_sorted)
-    else:
-        if grp_node_wd_sorted:
-            _cent_charts("Stillingsgrupper (node-niveau)",
-                         grp_node_wd_sorted, grp_node_bs_sorted or [])
+    if "Stillingsgrupper (aggregeret)" in _selected:
+        _cent_charts("Stillingsgrupper", grp_wd_sorted, grp_bs_sorted,
+                     color_map=grp_colors)
 
+    if "Stillingsgrupper (node-niveau)" in _selected:
+        _cent_charts("Stillingsgrupper (node-niveau)",
+                     grp_node_wd_sorted, grp_node_bs_sorted or [],
+                     color_map={k: "#901a1e" for k, _ in (grp_node_wd_sorted or [])})
+
+def compute_modularity_pre_for_key(snap: dict, comm_key: str) -> float:
+    """Genberegn foruddefineret modularitet for et snapshot med en given comm_key."""
+    import networkx as nx
+    nodes_snap = snap.get("nodes_keep", [])
+    edges_snap = snap.get("edges_keep", [])
+    node_meta_snap = snap.get("node_meta", {})
+    if not nodes_snap or not edges_snap:
+        return float("nan")
+    G = nx.Graph()
+    for u in nodes_snap: G.add_node(u)
+    for u, v, w, *_ in edges_snap: G.add_edge(u, v, weight=w)
+    _connected = {n for n in G.nodes() if G.degree(n) > 0}
+    G_conn = G.subgraph(_connected).copy()
+    comms = {}
+    for nid in nodes_snap:
+        gl = node_meta_snap.get(nid, {}).get(comm_key, "")
+        if gl:
+            comms.setdefault(gl, []).append(nid)
+    filtered = [[n for n in c if n in _connected] for c in comms.values()]
+    filtered = [c for c in filtered if c]
+    if not filtered or G_conn.number_of_edges() == 0:
+        return float("nan")
+    if any(len(c) == 1 for c in filtered):
+        return float("nan")
+    try:
+        val = modq(G_conn, filtered, weight="weight")
+        return val if val >= 0 else float("nan")
+    except Exception:
+        return float("nan")
 
 def render_tab_netvaerksstruktur(year, mode, density, modularity_pre, modularity_greedy,
                                   n_comms, communities_dict, greedy_comms, comm_key,
                                   edges_keep=None, node_meta=None, all_years_data=None):
     abbrs = {"fac": "fakulteter", "inst": "institutter", "grp": "stillingsgrupper"}
+    abbrs_singular = {"fac": "fakultet", "inst": "institut", "grp": "stillingsgruppe"}
 
-    st.subheader("Netværkstæthed og modularitet for udsnittet")
+     # Klyngeniveau-vælger
+    _available_keys = [
+        k for k, active in [
+            ("fac",  "F" in mode),
+            ("inst", "I" in mode),
+            ("grp",  "G" in mode),
+        ] if active
+    ]
+
+    st.subheader("Samarbejdsmønstre")
 
     st.markdown(
 f"""
 **Netværkstæthed** angiver andelen af mulige forbindelser, der faktisk
-forekommer i netværket. En høj tæthed betyder, at mange grupper samarbejder med hinanden,
+forekommer i netværket - inkl. isolerede noder (enheder uden sampubliceringer). 
+En høj tæthed betyder, at mange grupper samarbejder med hinanden,
 men en lav tæthed afspejler et mere spredt og opdelt samarbejdsmønster. 
 
 Vær opmærksom på valg af filtre og af intra-/interkanter.
@@ -3921,12 +4565,42 @@ Vær opmærksom på valg af filtre og af intra-/interkanter.
     st.markdown(
 f"""
 **Modularitet** beskriver, i hvilken grad et netværk er opdelt i adskilte klynger 
-sammenlignet med, hvad man vil forvente tilfældigt. 
+sammenlignet med, hvad man vil forvente tilfældigt. Modulariteten beregnes kun på baggrund af 
+enheder, der faktisk sampublicerer - isolerede noder indgår ikke.
 
 - Et netværk med høj modularitet (typisk over 0,3) er karakteriseret ved tydeligt
 adskilte grupper (klynger).
 - Lav modularitet (under 0,3) indikerer et mere sammenhængede netværk.
 """)
+
+    if len(_available_keys) > 1:
+        _key_labels = {"fac": "Fakultet", "inst": "Institut", "grp": "Stillingsgruppe"}
+        comm_key = st.radio(
+            "Foruddefinerede klynger baseres på:",
+            options=_available_keys,
+            format_func=lambda k: _key_labels[k],
+            horizontal=True,
+            index=_available_keys.index(comm_key) if comm_key in _available_keys else 0,
+            key=f"comm_key_radio_{year}_{mode}",
+        )
+        # Genberegn communities_dict med det valgte niveau
+        communities_dict = {}
+        for nid, m in (node_meta or {}).items():
+            gl = m.get(comm_key, "")
+            if gl:
+                communities_dict.setdefault(gl, []).append(nid)
+        # Genberegn modularity_pre med valgt comm_key
+        _G2_recompute = nx.Graph()
+        for nid in (node_meta or {}):
+            _G2_recompute.add_node(nid)
+        for u, v, w, *_ in (edges_keep or []):
+            _G2_recompute.add_edge(u, v, weight=w)
+        modularity_pre = _compute_mod_pre(
+            _G2_recompute,
+            list(_G2_recompute.nodes()),
+            node_meta or {},
+            comm_key,
+        )
 
     colA, colB, colC = st.columns(3)
     with colA:
@@ -3977,7 +4651,22 @@ adskilte grupper (klynger).
     ]
 
     # Node-count bar per cluster
-    st.markdown("##### Antal noder per klynge")
+    st.markdown(
+"""
+##### Antal noder per klynge
+
+For at beregne modulariteten opdeles noderne på to forskellige måder: 
+
+- **Foruddefinerede klynger** kan enten være fakulteter, institutter eller stillingsgrupper - 
+baseret på valgte enheder i sidepanelet. Hvis både fakulteter og institutter er
+valgte, består fakultets-klyngerne af deres respektive institutter. 
+
+- **Greedy-klynger** er baseret på Greedy-algoritmen, som automatisk finder de grupper 
+af forfattere, der hænger stærkest sammen i netværket. Algoritmen samler først
+noderne i små klynger og slår dem gradvist sammen, så den endelige struktur giver den 
+højest mulige modularitet ([Newman 2004](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.70.066111)). 
+
+""")
     _tab_pre, _tab_greedy = st.tabs(["Foruddefinerede klynger", "Greedy-klynger"])
 
     with _tab_pre:
@@ -4021,7 +4710,7 @@ adskilte grupper (klynger).
             )
             st.plotly_chart(_fig_gs, width='stretch')
         else:
-            st.info("Ingen greedy-klynger tilgængelige.")
+            st.error("Ingen greedy-klynger tilgængelige.")
         
         with st.expander("Se klyngetabel med greedy algoritme"):
             st.dataframe(build_table(greedy_rows, schema), hide_index=True, width="stretch")
@@ -4033,35 +4722,66 @@ adskilte grupper (klynger).
 
     # ── Modularitet og tæthed over tid ───────────────────────────────────────
     if all_years_data and len(all_years_data) >= 2:
-        st.markdown("##### Sammenlign år - modularitet og netværkstæthed")
+        st.markdown(
+"""##### Sammenlign år - modularitet og netværkstæthed
+I figuren nedenfor vises netværkstætheden samt modulariteterne. År, hvor 
+modulariteten er angivet som n/a, er udeladt fra visualiseringen.
+
+Vær opmærksom på, hvilke filtre der er valgt i sidepanelet, da de både påvirker 
+beregninger og visning.
+""")
 
         years_sorted = sorted(all_years_data.keys())
 
-        _density_vals = [all_years_data[y].get("density", float("nan")) for y in years_sorted]
-        #_mod_pre_vals = [all_years_data[y].get("modularity_pre", float("nan")) for y in years_sorted]
-        #_mod_gr_vals  = [all_years_data[y].get("modularity_greedy", float("nan")) for y in years_sorted]
+        _density_vals  = [all_years_data[y].get("density",           float("nan")) for y in years_sorted]
+        _mod_pre_key = f"modularity_pre_{comm_key}"
+        _mod_pre_vals = [all_years_data[y].get(_mod_pre_key, float("nan")) for y in years_sorted]
+        _mod_gr_vals   = [all_years_data[y].get("modularity_greedy", float("nan")) for y in years_sorted]
 
-        # Replace NaN with None so Plotly renders gaps cleanly
         def _clean(lst):
             return [None if (v is None or (isinstance(v, float) and math.isnan(v))) else v for v in lst]
 
+        # Filtrér år væk hvor alle tre værdier er None/nan
+        _yr_plot = years_sorted
+
+        def _filter(lst):
+            return _clean(lst)
+
         _fig_mt = go.Figure()
         _fig_mt.add_trace(go.Scatter(
-            x=years_sorted, y=_clean(_density_vals),
+            x=_yr_plot, y=_filter(_density_vals),
             name="Netværkstæthed",
-            mode="lines+markers",
+            mode="lines+markers+text",
+            text=[f"{v:.3f}" if v is not None else "" for v in _filter(_density_vals)],
+            textposition="top center",
             line=dict(color="#122947", width=2),
             marker=dict(size=8),
-            yaxis="y1",
         ))
- 
+        _fig_mt.add_trace(go.Scatter(
+            x=_yr_plot, y=_filter(_mod_pre_vals),
+            name="Modularitet (foruddefinerede)",
+            mode="lines+markers+text",
+            text=[f"{v:.3f}" if v is not None else "" for v in _filter(_mod_pre_vals)],
+            textposition="top center",
+            line=dict(color="#4a7ca8", width=2, dash="dash"),
+            marker=dict(size=8),
+        ))
+        _fig_mt.add_trace(go.Scatter(
+            x=_yr_plot, y=_filter(_mod_gr_vals),
+            name="Modularitet (greedy)",
+            mode="lines+markers+text",
+            text=[f"{v:.3f}" if v is not None else "" for v in _filter(_mod_gr_vals)],
+            textposition="bottom center",
+            line=dict(color="#39641c", width=2, dash="dot"),
+            marker=dict(size=8),
+        ))
         _fig_mt.update_layout(
-            xaxis=dict(tickmode="array", tickvals=years_sorted, dtick=1),
-            yaxis=dict(title="Netværkstæthed", side="left", rangemode="tozero"),
-            legend=dict(x=0.01, y=0.99, bgcolor="rgba(255,255,255,0.8)"),
+            xaxis=dict(tickmode="array", tickvals=_yr_plot, dtick=1),
+            yaxis=dict(title="Værdi (0–1)", rangemode="tozero"),
+            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0),
             height=420,
-            margin=dict(t=20),
-            )
+            margin=dict(t=20, b=80),
+        )
         st.plotly_chart(_fig_mt, width='stretch')
 
         with st.expander("Se tabel", expanded = False):
@@ -4094,8 +4814,9 @@ adskilte grupper (klynger).
     # ── Heatmap: kantvægt mellem klynger ────────────────────────────────────
     st.markdown("#### Sampubliceringsstyrke mellem klyngerne")
     st.markdown(
-"""
-Nedenfor er et heatmap, der afdækker antal publikationer mellem klyngerne (fakulteterne). 
+f"""
+Heatmappet viser det samlede antal forfatterpar mellem {abbrs.get(comm_key, comm_key)}.
+Diagonalen angiver interne forfatterpar inden for samme {abbrs_singular.get(comm_key, comm_key)}.
 """)
     _units = sorted(communities_dict.keys())
     if len(_units) >= 2 and edges_keep and node_meta:
@@ -4117,40 +4838,138 @@ Nedenfor er et heatmap, der afdækker antal publikationer mellem klyngerne (faku
 
         _z = [[_mat.get((a, b), 0.0) for b in _units] for a in _units]
 
-        if len(_units) <= HEATMAP_MAX:
+        if len(_units) > HEATMAP_MAX:
+            _unit_totals = sorted(
+                _units,
+                key=lambda a: sum(_mat.get((a, b), 0) for b in _units),
+                reverse=True
+            )
+            _default_units = _unit_totals[:HEATMAP_MAX]
+            _selected_units = st.multiselect(
+                f"For mange enheder til heatmap ({len(_units)}). Vælg hvilke der vises (maks {HEATMAP_MAX}):",
+                options=_units,
+                default=_default_units,
+                key=f"heatmap_filter_{year}_{mode}",
+            )
+            _units_plot = _selected_units if _selected_units else _default_units
+        else:
+            _units_plot = _units
 
+        if _units_plot:
+            _z_plot = [[_mat.get((a, b), 0.0) for b in _units_plot] for a in _units_plot]
             _fig_heat = go.Figure(go.Heatmap(
-                z=_z, x=_units, y=_units,
+                z=_z_plot, x=_units_plot, y=_units_plot,
                 colorscale=[[0, "#f0f4f8"], [1, "#122947"]],
-                text=[[f"{_mat.get((a,b),0):.0f}" for b in _units] for a in _units],
+                text=[[f"{_mat.get((a,b),0):.0f}" for b in _units_plot] for a in _units_plot],
                 texttemplate="%{text}",
                 hovertemplate="%{y} → %{x}: %{z:.0f}<extra></extra>",
                 showscale=True,
-                colorbar=dict(title="Antal publikationer"),
+                colorbar=dict(title="Antal forfatterpar"),
             ))
             _fig_heat.update_layout(
-                xaxis_title=comm_key.capitalize(),
-                yaxis_title=comm_key.capitalize(),
-                height=max(400, 60 * len(_units)),
-                margin=dict(l=140, b=140, t=20),
+                xaxis_title=abbrs.get(comm_key, comm_key).capitalize(),
+                yaxis_title=abbrs.get(comm_key, comm_key).capitalize(),
+                yaxis=dict(showgrid=False),
+                height=max(380, 60 * len(_units_plot)),
+                margin=dict(l=140, b=140, t=10),
             )
+            
             st.plotly_chart(_fig_heat, width='stretch')
 
         _heat_rows = [
-                {"Fra": a, "Til": b, "Antal publikationer": int(_mat.get((a, b), 0))}
+                {"Fra": a, "Til": b, "Antal forfatterpar": int(_mat.get((a, b), 0))}
                 for a in _units for b in _units
                 if a != b and _mat.get((a, b), 0) > 0
             ]
-        _heat_schema = [("Fra", pa.string()), ("Til", pa.string()), ("Antal publikationer", pa.int64())]
+        _heat_schema = [("Fra", pa.string()), ("Til", pa.string()), ("Antal forfatterpar", pa.int64())]
         
         with st.expander("Se tabel"):
             st.dataframe(build_table(_heat_rows, _heat_schema), hide_index=True, width="stretch")
             st.download_button(
                     "Download (.xlsx)",
-                    data=rows_to_excel_bytes(_heat_rows, ["Fra", "Til", "Antal publikationer"]),
-                    file_name=f"sampublikationer_matrix_{mode}_{year}.xlsx",
+                    data=rows_to_excel_bytes(_heat_rows, ["Fra", "Til", "Antal forfatterpar"]),
+                    file_name=f"forfatterpar_matrix_{mode}_{year}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
+
+    # ── 3. Isolerede enheder over tid ─────────────────────────────────────────
+    if all_years_data and len(all_years_data) >= 2:
+        st.markdown("#### Er de samme enheder altid isolerede?")
+        st.markdown(
+f"""
+Enheder, der konsekvent er isolerede (ingen sampubliceringer i det valgte udsnit) 
+kan pege på strukturelle barrierer. Enheder, der kun lejlighedsvist er isolerede kan 
+afspejle dataudfald eller midlertidige forhold - og derfor viser figuren kun ender, der har været
+isolerede i **mindst to år**.
+""")
+        years_sorted = sorted(all_years_data.keys())
+
+        # Collect all units ever isolated
+        _all_isolated: dict[str, list] = {}
+        for yr in years_sorted:
+            for unit in all_years_data[yr].get("isolated_units", []):
+                _all_isolated.setdefault(unit, []).append(yr)
+
+        _persistent = {unit: yrs for unit, yrs in _all_isolated.items() if len(yrs) >= 2}
+
+        if not _persistent:
+            st.error("Ingen enheder har været isolerede i to eller flere år.")
+        else:
+            # Sort: most-frequently isolated first
+            _iso_sorted = sorted(_persistent.items(), key=lambda x: -len(x[1]))
+
+            _iso_tbl_rows = [
+            {
+                "Enhed":               unit,
+                "Antal isolerede år":  int(len(yrs)),
+                "Isoleret i år":       ", ".join(str(y) for y in sorted(yrs)),
+                "Konsekvent isoleret": "Ja" if len(yrs) == len(years_sorted) else "Nej",
+            }
+            for unit, yrs in _iso_sorted
+            ]
+            _iso_schema = [
+                ("Enhed",                pa.string()),
+                ("Antal isolerede år",   pa.int64()),
+                ("Isoleret i år",        pa.string()),
+                ("Konsekvent isoleret",  pa.string()),
+            ]
+
+            # Presence/absence heatmap
+            _iso_units = [r["Enhed"] for r in _iso_tbl_rows]
+            _iso_z = [
+                [1 if yr in _persistent[unit] else 0 for yr in years_sorted]
+                for unit in _iso_units
+            ]
+            _fig_iso = go.Figure(go.Heatmap(
+                z=_iso_z,
+                x=[str(yr) for yr in years_sorted],
+                y=_iso_units,
+                colorscale=[[0, "#f0f4f8"], [1, "#7A131A"]],
+                zmin=0, zmax=1,
+                text=[["Isoleret" if v else "" for v in row] for row in _iso_z],
+                texttemplate="%{text}",
+                showscale=False,
+                hovertemplate="%{y} - %{x}: %{text}<extra></extra>",
+            ))
+            _fig_iso.update_layout(
+                xaxis_title="År",
+                height=max(300, 28 * len(_iso_units)),
+                margin=dict(l=220, t=20, r=20),
+            )
+            st.plotly_chart(_fig_iso, width='stretch')
+
+            with st.expander("Se tabel"):
+                st.dataframe(build_table(_iso_tbl_rows, _iso_schema), hide_index=True, width="stretch")
+                st.download_button(
+                    "Download (.xlsx)",
+                    data=rows_to_excel_bytes(_iso_tbl_rows, [n for n, _ in _iso_schema]),
+                    file_name=f"isolerede_enheder_over_tid_{mode}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+    
+    
+    _units = sorted(communities_dict.keys())
+    if len(_units) >= 2 and edges_keep and node_meta:
 
         # ── Reciprocitetsgrad ─────────────────────────────────────────────
         st.markdown("#### Samarbejdssymmetri mellem klyngerne")
@@ -4215,45 +5034,61 @@ af fakulteter, der retter sig mod fakultet Y - og omvendt.
             _andel_a = _most_asym["A's andel til B (%)"]
             _andel_b = _most_asym["B's andel til A (%)"]
 
-            st.markdown(
-f"""
-Det **mest gensidige** samarbejdspar er **{_most_sym['A']} ↔ {_most_sym['B']}** med en symmetriscore 
-på **{_most_sym['Symmetriscore']:.2f}** (kantvægt: {int(_most_sym['Kantvægt'])}). 
-Det **mest asymmetriske** par er **{_most_asym['A']} ↔ {_most_asym['B']}** 
-(score: **{_most_asym['Symmetriscore']:.2f}**), hvor **{_most_asym['A']}** retter **{_andel_a:.0f}%** 
-af sit inter-samarbejde mod **{_most_asym['B']}**, mens **{_most_asym['B']}** kun retter 
-**{_andel_b:.0f}%** mod **{_most_asym['A']}**. På tværs af alle par er **{_most_sym_unit}** 
-gennemsnitligt den mest gensidige enhed (gns. score: {_unit_avg[_most_sym_unit]:.2f}), 
-mens **{_least_sym_unit}** indgår i de mest skæve samarbejder (gns. score: {_unit_avg[_least_sym_unit]:.2f}).
-"""
-            )
+            #st.markdown(
+#f"""
+#Det **mest gensidige** samarbejdspar er **{_most_sym['A']} ↔ {_most_sym['B']}** med en symmetriscore 
+#på **{_most_sym['Symmetriscore']:.2f}** (kantvægt: {int(_most_sym['Kantvægt'])}). 
+#Det **mest asymmetriske** par er **{_most_asym['A']} ↔ {_most_asym['B']}** 
+#(score: **{_most_asym['Symmetriscore']:.2f}**), hvor **{_most_asym['A']}** retter **{_andel_a:.0f}%** 
+#af sit inter-samarbejde mod **{_most_asym['B']}**, mens **{_most_asym['B']}** kun retter 
+#**{_andel_b:.0f}%** mod **{_most_asym['A']}**. På tværs af alle par er **{_most_sym_unit}** 
+#gennemsnitligt den mest gensidige enhed (gns. score: {_unit_avg[_most_sym_unit]:.2f}), 
+#mens **{_least_sym_unit}** indgår i de mest skæve samarbejder (gns. score: {_unit_avg[_least_sym_unit]:.2f}).
+#""")
 
-            if len(_units) <= HEATMAP_MAX:
+            if len(_units) > HEATMAP_MAX:
+                _unit_totals_sym = sorted(
+                    _units,
+                    key=lambda a: sum(_pair_w.get((min(a,b), max(a,b)), 0) for b in _units),
+                    reverse=True
+                )
+                _default_units_sym = _unit_totals_sym[:HEATMAP_MAX]
+                _selected_units_sym = st.multiselect(
+                    f"For mange enheder til heatmap ({len(_units)}). Vælg hvilke der vises (maks {HEATMAP_MAX}):",
+                    options=_units,
+                    default=_default_units_sym,
+                    key=f"heatmap_sym_filter_{year}_{mode}",
+                )
+                _units_sym = _selected_units_sym if _selected_units_sym else _default_units_sym
+            else:
+                _units_sym = _units
+
+            if _units_sym:
                 # Symmetry heatmap
-                _sym_mat = {(a, b): 0.0 for a in _units for b in _units}
+                _sym_mat = {(a, b): 0.0 for a in _units_sym for b in _units_sym}
                 for r in _sym_rows:
-                    _sym_mat[(r["A"], r["B"])] = r["Symmetriscore"]
-                    _sym_mat[(r["B"], r["A"])] = r["Symmetriscore"]
-                _sz = [[_sym_mat.get((a, b), float("nan")) for b in _units] for a in _units]
-                # Replace self-pairs with nan for visual clarity
-                for i in range(len(_units)):
+                    if r["A"] in _units_sym and r["B"] in _units_sym:
+                        _sym_mat[(r["A"], r["B"])] = r["Symmetriscore"]
+                        _sym_mat[(r["B"], r["A"])] = r["Symmetriscore"]
+                _sz = [[_sym_mat.get((a, b), float("nan")) for b in _units_sym] for a in _units_sym]
+                for i in range(len(_units_sym)):
                     _sz[i][i] = float("nan")
 
                 _fig_sym = go.Figure(go.Heatmap(
-                    z=_sz, x=_units, y=_units,
+                    z=_sz, x=_units_sym, y=_units_sym,
                     colorscale=[[0, "#f0f4f8"], [1, "#122947"]],
                     zmin=0, zmax=1,
                     text=[[f"{_sz[i][j]:.2f}" if not (isinstance(_sz[i][j], float) and math.isnan(_sz[i][j])) else ""
-                        for j in range(len(_units))] for i in range(len(_units))],
+                        for j in range(len(_units_sym))] for i in range(len(_units_sym))],
                     texttemplate="%{text}",
                     hovertemplate="%{y} ↔ %{x}: symmetri %{z:.3f}<extra></extra>",
                     colorbar=dict(title="Symmetri (0–1)"),
                 ))
                 _fig_sym.update_layout(
-                    xaxis_title=comm_key.capitalize(),
-                    yaxis_title=comm_key.capitalize(),
+                    xaxis_title=abbrs.get(comm_key, comm_key).capitalize(),
+                yaxis_title=abbrs.get(comm_key, comm_key).capitalize(),
                     yaxis=dict(showgrid=False),
-                    height=max(380, 60 * len(_units)),
+                    height=max(380, 60 * len(_units_sym)),
                     margin=dict(l=140, b=140, t=10),
                 )
                 st.plotly_chart(_fig_sym, width='stretch')
@@ -4297,24 +5132,17 @@ mens **{_least_sym_unit}** indgår i de mest skæve samarbejder (gns. score: {_u
     
 
 
-def render_tab_datagrundlag(year, mode, all_groups, selected_facs, selected_insts, selected_grps):
+def render_tab_datagrundlag(year, mode, all_groups, selected_facs, selected_insts, selected_grps,
+                             forfatterantal=None, publikationstyper=None,
+                             faculty_base_colors=None, years_sorted=None, pubtype_map=None):
     st.subheader("Datagrundlag")
-
-    try:
-        curis_created = datetime.fromtimestamp(os.path.getctime(str(CURIS_CSV_PATH))).strftime("%Y-%m-%d")
-    except OSError:
-        curis_created = "ukendt"
-    try:
-        hr_created = datetime.fromtimestamp(os.path.getctime(str(HR_CSV_PATH))).strftime("%Y-%m-%d")
-    except OSError:
-        hr_created = "ukendt"
 
     st.markdown(
 f"""Netværk og de tilhørende opgørelser bygger på følgende datagrundlag:
-- CURIS-publikationer for 2021–2025, udtrukket d. {curis_created}
+- CURIS-publikationer for 2021–2025
     - Særligt 2025-data kan være ufuldstændige, da registrering 
     kan ske med forsinkelse
-- VIP-forfattere matchet via HR-data, udtrukket d. {hr_created}
+- VIP-forfattere matchet via HR-data
 
 Analysen omfatter kun publikationer med mindst én KU-associeret forfatter. Instituttilknytning
 er fastlagt ved hjælp af en struktureret liste over KU-institutter. Publikationer med forskellige
@@ -4325,97 +5153,32 @@ følgende publikationer ikke i opgørelserne:
 - Publikationer, der er registrerede uden forfattere
 - Publikationer, hvor der kun er registreret én KU-forfatter
 
-Publikationstyper er grupperet i overordnede kategorier på baggrund af XX nedenstående XX
-tabel, så beslægtede formater samles og kan sammenlignes på tværs af fakulteter.
+Publikationstyper er grupperet i overordnede kategorier, så beslægtede formater samles 
+og kan sammenlignes på tværs af fakulteter.
 """)
 
-    inst_filter, inst_to_fac = load_inst_filter(str(INST_FILTER_PATH))
-    counts    = defaultdict(lambda: defaultdict(lambda: {"0": 0, "1": 0, "gt1": 0}))
-    PUBTYPE_MAP = load_pubtype_map(PUBTYPE_CSV_PATH)
-    pub_types = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
+    yr_str   = str(year)
+    fac_order = [f for f in FAC_ORDER if f in (forfatterantal or {}).get(yr_str, {})]
+    _fa       = (forfatterantal or {}).get(yr_str, {})
+    _fac_colors = [faculty_base_colors.get(f, "#122947") if faculty_base_colors else "#122947" for f in fac_order]
 
-    with open(str(CURIS_CSV_PATH), encoding="utf-8") as f:
-        reader = csv.DictReader(f, delimiter=";")
-        for row in reader:
-            try:
-                pub_year = int(row["Udgivelsesår"])
-            except (ValueError, KeyError):
-                continue
-            if pub_year != year:
-                continue
+    # ── Forfatterantal ────────────────────────────────────────────────
+    one_counts  = [_fa.get(f, {}).get("1",   0) for f in fac_order]
+    many_counts = [_fa.get(f, {}).get("gt1", 0) for f in fac_order]
 
-            raw_inst = row.get("Institut(ter)") or ""
-            try:
-                inst_vals = ast.literal_eval(raw_inst) if raw_inst else []
-            except (ValueError, SyntaxError):
-                inst_vals = []
-
-            inst_candidates = []
-            for entry in inst_vals:
-                if isinstance(entry, list):
-                    for item in entry:
-                        if not item:
-                            continue
-                        item = item.strip()
-                        if not item or item == "0":
-                            continue
-                        if item in inst_filter:
-                            inst_candidates.append(item)
-                        else:
-                            parts = [p.strip() for p in re.split(r",|;", item) if p.strip() and p.strip() != "0"]
-                            inst_candidates.extend(parts)
-
-            inst_choice = next((c for c in inst_candidates if c in inst_filter), None)
-            if not inst_choice:
-                continue
-            
-
-            raw_pub_type  = row["Type"].strip()
-            pub_type = PUBTYPE_MAP.get(raw_pub_type, raw_pub_type)
-
-            raw_auth  = row["Forfatter(e)"].strip()
-            if raw_auth in ("0", "['0']", "[[0]]", "[['0']]"):
-                key = "0"
-            else:
-                authors = [a.strip() for a in raw_auth.split(",") if a.strip()]
-                key = "1" if len(authors) == 1 else "gt1"
-
-            raw_fac  = row["Fakultet(er)"]
-            clean    = raw_fac.replace("[", "").replace("]", "").replace("'", "")
-            fac_list = [f.strip() for f in clean.split(",") if f.strip() and f.strip() != "0"]
-            if not fac_list:
-                continue
-
-            for fac in fac_list:
-                if fac not in FAC_ABBRS:
-                    continue
-                counts[fac][year][key]       += 1
-                pub_types[fac][year][pub_type] += 1
-
-
-    all_pub_types = sorted({t for fac in pub_types for y in pub_types[fac] for t in pub_types[fac][y]})
-    faculties     = sorted(counts.keys())
-
-    one_counts  = [counts[fac][year]["1"]   for fac in faculties]
-    many_counts = [counts[fac][year]["gt1"] for fac in faculties]
-
-    ratio_per_fac = {}
-    for fac, one, many in zip(faculties, one_counts, many_counts):
-        total = one + many
-        if total > 0:
-            ratio_per_fac[fac] = one / total * 100
+    ratio_per_fac = {f: one / (one + many) * 100
+                     for f, one, many in zip(fac_order, one_counts, many_counts)
+                     if (one + many) > 0}
 
     if ratio_per_fac:
         min_fac = min(ratio_per_fac, key=ratio_per_fac.get)
-        min_val = ratio_per_fac[min_fac]
         max_fac = max(ratio_per_fac, key=ratio_per_fac.get)
-        max_val = ratio_per_fac[max_fac]
-        abs_one = counts.get(max_fac, {}).get(year, {}).get("1", 0)
-
+        min_val, max_val = ratio_per_fac[min_fac], ratio_per_fac[max_fac]
+        abs_one = _fa.get(max_fac, {}).get("1", 0)
     else:
         min_fac = max_fac = None
-        min_val = max_val = 0.0
-        abs_one = 0
+        min_val = max_val = abs_one = 0
+
 
     st.markdown(
 f"""
@@ -4430,24 +5193,77 @@ Andelen af publikationer med én KU-forfatter varierer fra **{min_val:.1f}%** ({
  **{max_val:.1f}%** ({max_fac}), svarende til **{abs_one}** frasorterede publikationer.
 """)
     
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=faculties, y=one_counts, name="1 forfatter",
-        marker_color="#122947",
-        text=[f"{v}" for v in one_counts], textposition="inside", textfont_color="white",
-    ))
-    fig.add_trace(go.Bar(
-        x=faculties, y=many_counts, name=">1 forfatter",
-        marker_color="#bac7d9",
-        text=[f"{v}" for v in many_counts], textposition="inside",
-    ))
-    fig.update_layout(
-        barmode="stack",
-        yaxis_title="Antal publikationer",
-        legend_title="Forfattere",
-        height=380,
+    _tab_abs_fa, _tab_pct_fa, _tab_tid_fa = st.tabs(["Antal", "Andel (%)", "Udvikling over tid"])
+
+    with _tab_abs_fa:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=fac_order, y=one_counts, name="1 KU-forfatter",
+            marker_color=[adjust_color(c, 2.2, 0.3) for c in _fac_colors],
+            text=[str(v) for v in one_counts], textposition="inside", textfont_color="white",
+        ))
+        fig.add_trace(go.Bar(
+            x=fac_order, y=many_counts, name=">1 KU-forfatter",
+            marker_color=_fac_colors,
+            text=[str(v) for v in many_counts], textposition="inside", textfont_color="white",
+        ))
+        fig.update_layout(barmode="stack", yaxis_title="Antal publikationer",
+                          legend_title="KU-forfattere", height=380, margin=dict(t=20))
+        st.plotly_chart(fig, width="stretch", key=f"dg_forfatter_abs_{year}_{mode}")
+
+    with _tab_pct_fa:
+        _pct_one  = [ratio_per_fac.get(f, 0) for f in fac_order]
+        _pct_many = [round(100 - v, 1) for v in _pct_one]
+        fig_pct = go.Figure()
+        fig_pct.add_trace(go.Bar(
+            x=fac_order, y=_pct_one, name="1 KU-forfatter",
+            marker_color=[adjust_color(c, 2.2, 0.3) for c in _fac_colors],
+            text=[f"{v:.1f}%" for v in _pct_one], textposition="inside", textfont_color="white",
+        ))
+        fig_pct.add_trace(go.Bar(
+            x=fac_order, y=_pct_many, name=">1 KU-forfatter",
+            marker_color=_fac_colors,
+            text=[f"{v:.1f}%" for v in _pct_many], textposition="inside", textfont_color="white",
+        ))
+        fig_pct.update_layout(barmode="stack", yaxis=dict(title="Andel (%)", range=[0, 100]),
+                               legend_title="KU-forfattere", height=380, margin=dict(t=20))
+        st.plotly_chart(fig_pct, width="stretch", key=f"dg_forfatter_pct_{year}_{mode}")
+
+    with _tab_tid_fa:
+        if forfatterantal and years_sorted:
+            fig_tid = go.Figure()
+            for f, col in zip(fac_order, _fac_colors):
+                _y_vals = []
+                for yr in years_sorted:
+                    _d = forfatterantal.get(str(yr), {}).get(f, {})
+                    _one, _many = _d.get("1", 0), _d.get("gt1", 0)
+                    _tot = _one + _many
+                    _y_vals.append(round(_one / _tot * 100, 1) if _tot else 0)
+                fig_tid.add_trace(go.Scatter(
+                    x=years_sorted, y=_y_vals, name=f,
+                    mode="lines+markers+text",
+                    text=[f"{v:.1f}%" for v in _y_vals],
+                    textposition="top center",
+                    line=dict(color=col, width=2), marker=dict(size=7),
+                ))
+            fig_tid.update_layout(
+                yaxis=dict(title="Andel med 1 KU-forfatter (%)", range=[0, 100]),
+                xaxis=dict(tickmode="array", tickvals=years_sorted, dtick=1),
+                height=420, margin=dict(t=20, b=120),
+                legend_title="Fakulteter"
+            )
+            st.plotly_chart(fig_tid, width="stretch", key=f"dg_forfatter_tid_{year}_{mode}")
+        else:
+            st.error("Tidsdata ikke tilgængelig.")
+    
+    # ── Publikationstyper ─────────────────────────────────────────────
+    _pt          = (publikationstyper or {}).get(yr_str, {})
+    fac_order_pt  = [f for f in FAC_ORDER if f in _pt]
+    all_pub_types = sorted(
+        {t for fd in _pt.values() for t in fd},
+        key=lambda t: -sum(_pt.get(f, {}).get(t, 0) for f in fac_order_pt)
     )
-    st.plotly_chart(fig, width='stretch')
+    _pt_colors    = ku_color_sequence(len(all_pub_types))
 
     st.markdown(
 f"""##### Publikationstyper per fakultet
@@ -4457,25 +5273,49 @@ f.eks. samles konferenceformater i én fælles kategori. Tallene angiver antalle
 publikationer, ikke vægtede mål. 
 
 """)
-    fig2 = go.Figure()
-    colors = ku_color_sequence(len(all_pub_types))
+    # Kategoriinddeling
+    _tab_abs_pt, _tab_pct_pt = st.tabs(["Antal", "Andel (%)"])
 
-    for i, t in enumerate(all_pub_types):
-        _vals = [pub_types[fac][year][t] for fac in faculties]
-        fig2.add_trace(go.Bar(
-            x=faculties, y=_vals, name=t,
-            text=[f"{v}" if v > 0 else "" for v in _vals],
-            textposition="inside",
-            marker_color = colors[-i]
-        ))
-    fig2.update_layout(
-        barmode="stack",
-        yaxis_title="Antal publikationer",
-        legend_title="Type",
-        height=500,
-    )
-    st.plotly_chart(fig2, width='stretch')
+    with _tab_abs_pt:
+        fig2 = go.Figure()
+        for i, t in enumerate(all_pub_types):
+            _vals = [_pt.get(f, {}).get(t, 0) for f in fac_order_pt]
+            fig2.add_trace(go.Bar(
+                x=fac_order_pt, y=_vals, name=t,
+                text=[str(v) if v > 0 else "" for v in _vals],
+                textposition="inside",
+                marker_color=_pt_colors[-(i+1)],
+            ))
+        fig2.update_layout(barmode="stack", yaxis_title="Antal publikationer",
+                           legend_title="Kategori", height=500, margin=dict(t=20),
+                           legend=dict(traceorder="reversed"))
+        st.plotly_chart(fig2, width="stretch", key=f"dg_pubtype_abs_{year}_{mode}")
 
+    with _tab_pct_pt:
+        fig3 = go.Figure()
+        for i, t in enumerate(all_pub_types):
+            _vals_pct = []
+            for f in fac_order_pt:
+                _tot = sum(_pt.get(f, {}).values()) or 1
+                _vals_pct.append(round(_pt.get(f, {}).get(t, 0) / _tot * 100, 1))
+            fig3.add_trace(go.Bar(
+                x=fac_order_pt, y=_vals_pct, name=t,
+                text=[f"{v:.1f}%" if v > 0 else "" for v in _vals_pct],
+                textposition="inside",
+                marker_color=_pt_colors[-(i+1)],
+            ))
+        fig3.update_layout(barmode="stack",
+                           yaxis=dict(title="Andel (%)", range=[0, 100]),
+                           legend_title="Type", height=500, margin=dict(t=20),
+                           legend=dict(traceorder="reversed"))
+        st.plotly_chart(fig3, width="stretch", key=f"dg_pubtype_pct_{year}_{mode}")
+
+    if pubtype_map:
+        _map_rows = sorted(set((raw, mapped) for raw, mapped in pubtype_map.items()))
+        with st.expander("Se kategoriinddeling"):
+            _map_schema = [("CURIS-type", pa.string()), ("Kategori", pa.string())]
+            _map_data   = [{"CURIS-type": r, "Kategori": m} for r, m in _map_rows]
+            st.dataframe(build_table(_map_data, _map_schema), hide_index=True, width="stretch")
 
 # ---------------------------------------------------------------------------
 
@@ -4643,32 +5483,221 @@ f"""##### Forfatterbidrag fordelt på køn i {year}
         )
 
         if all_grps:
-            fig = go.Figure()
-            for sex_key, sex_label in sex_keys:
-                for pos_name, pos_label in pos_labels:
+            _tab_pos_abs, _tab_pos_pct = st.tabs(["Antal", "Andel (%)"])
+
+            def _make_pos_fig(use_pct: bool) -> go.Figure:
+                fig = go.Figure()
+                for sex_key, sex_label in sex_keys:
                     sex_data = yr_data.get("sex", {}).get(sex_key, {})
-                    fig.add_trace(go.Bar(
-                        name=f"{pos_label}",
-                        y=all_grps,
-                        x=[sex_data.get(g, {}).get(pos_name, 0) for g in all_grps],
-                        orientation="h",
-                        marker_color=pos_sex_colors[(pos_name, sex_key)],
-                        legendgroup=sex_key,
-                        legendgrouptitle_text=sex_label if pos_name == "first" else None,
-                        text=[sex_data.get(g, {}).get(pos_name, 0) for g in all_grps],
-                        textposition="inside",
-                        offsetgroup=sex_key
-                    ))
-            fig.update_layout(
-                barmode="stack",
-                xaxis_title="Antal publikationer",
-                height=max(350, 70 * len(all_grps)),
-                margin=dict(l=160, t=20, r=20),
-                bargap=0.1,
-                bargroupgap=0.1,
-                yaxis=dict(autorange="reversed"),
-            )
-            st.plotly_chart(fig, width="stretch", key=f"pos_sex_fig_{year}_{mode}")
+                    for pos_name, pos_label in pos_labels:
+                        if use_pct:
+                            vals, texts = [], []
+                            for g in all_grps:
+                                gd = sex_data.get(g, {})
+                                tot = sum(gd.get(p, 0) for p, _ in pos_labels) or 1
+                                pct = round(100 * gd.get(pos_name, 0) / tot, 1)
+                                vals.append(pct)
+                                texts.append(f"{pct:.1f}%")
+                        else:
+                            vals  = [sex_data.get(g, {}).get(pos_name, 0) for g in all_grps]
+                            texts = [str(v) for v in vals]
+                        fig.add_trace(go.Bar(
+                            name=pos_label,
+                            y=all_grps,
+                            x=vals,
+                            orientation="h",
+                            marker_color=pos_sex_colors[(pos_name, sex_key)],
+                            legendgroup=sex_key,
+                            legendgrouptitle_text=sex_label if pos_name == "first" else None,
+                            text=texts,
+                            textposition="inside",
+                            offsetgroup=sex_key,
+                            hovertemplate=f"<b>%{{y}}</b> – {sex_label}<br>{pos_label}: %{{x}}" +
+                                          ("%" if use_pct else "") + "<extra></extra>",
+                        ))
+                fig.update_layout(
+                    barmode="stack",
+                    xaxis_title="Andel af forfatterbidrag (%)" if use_pct else "Antal forfatterbidrag",
+                    xaxis=dict(range=[0, 100]) if use_pct else {},
+                    height=max(350, 70 * len(all_grps)),
+                    margin=dict(l=160, t=20, r=20),
+                    bargap=0.1,
+                    bargroupgap=0.1,
+                    yaxis=dict(autorange="reversed"),
+                )
+                return fig
+
+            with _tab_pos_abs:
+                st.plotly_chart(_make_pos_fig(False), width="stretch", key=f"pos_sex_abs_{year}_{mode}")
+
+            with _tab_pos_pct:
+                st.markdown("Andelen viser hvor stor en del af hver køns forfatterbidrag, der falder i hver forfatterposition - f.eks. hvor mange procent af kvindelige lektorers bidrag der er som førsteforfatter.")
+                st.plotly_chart(_make_pos_fig(True), width="stretch", key=f"pos_sex_pct_{year}_{mode}")
+
+            _pos_rows = []
+            for g in all_grps:
+                row = {"Stillingsgruppe": g}
+                for sex_key, sex_label in sex_keys:
+                    sex_data = yr_data.get("sex", {}).get(sex_key, {})
+                    gd = sex_data.get(g, {})
+                    tot = sum(gd.get(p, 0) for p, _ in pos_labels) or 1
+                    for pos_name, pos_label in pos_labels:
+                        v = gd.get(pos_name, 0)
+                        row[f"{sex_label} – {pos_label} (n)"]  = v
+                        row[f"{sex_label} – {pos_label} (%)"] = round(100 * v / tot, 1)
+                _pos_rows.append(row)
+
+            _pos_col_names = ["Stillingsgruppe"] + [
+                f"{sex_label} – {pos_label} {suffix}"
+                for sex_key, sex_label in sex_keys
+                for pos_name, pos_label in pos_labels
+                for suffix in ["(n)", "(%)"]
+            ]
+            _pos_schema = [("Stillingsgruppe", pa.string())] + [
+                (c, pa.float64() if "(%)" in c else pa.int64())
+                for c in _pos_col_names[1:]
+            ]
+            with st.expander("Se tabel"):
+                st.dataframe(build_table(_pos_rows, _pos_schema), hide_index=True, width="stretch")
+                st.download_button(
+                    "Download (.xlsx)",
+                    data=rows_to_excel_bytes(_pos_rows, _pos_col_names),
+                    file_name=f"forfatterpositioner_køn_{year}_{mode}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"dl_pos_sex_{year}_{mode}",
+                )
+
+    # ── Køn × sampubliceringsaktivitet per org-enhed ─────────────────────
+    if mode in ("FS", "F", "FI", "FG", "FIG"):
+        _sx_org_key   = "fac"
+        _sx_org_label = "Fakultet"
+        _sx_heading   = "Sampubliceringsaktivitet per køn og fakultet"
+    elif mode in ("IS", "I", "IG"):
+        _sx_org_key   = "inst"
+        _sx_org_label = "Institut"
+        _sx_heading   = "Sampubliceringsaktivitet per køn og institut"
+    else:
+        _sx_org_key   = "grp"
+        _sx_org_label = "Stillingsgruppe"
+        _sx_heading   = "Sampubliceringsaktivitet per køn og stillingsgruppe"
+
+    st.markdown(f"#### {_sx_heading}")
+    st.markdown(f"""
+Figuren viser den samlede sampubliceringsaktivitet for kvindelige og mandlige forskere, **målt 
+som forfatterpar**. Et forfatterpar opstår når to forfattere sampublicerer — en publikation med 
+fire forfattere giver således seks forfatterpar. Hver forfatter
+tildeles halvdelen af kantvægten per par, så tallene kan summeres på tværs af enheder.
+Tallene er dermed ikke direkte sammenlignelige med antallet af publikationer.
+""")
+
+    _grp_sex_ew: dict[str, dict[str, float]] = {}
+    _grp_sex_size: dict[str, dict[str, int]] = {}
+
+    for nid, m in node_meta.items():
+        if m.get("type") != "grp":
+            continue
+        org = m.get(_sx_org_key, "")
+        sex = m.get("sex", "")
+        if not org or not sex:
+            continue
+        _grp_sex_size.setdefault(org, {})
+        _grp_sex_size[org][sex] = _grp_sex_size[org].get(sex, 0) + m.get("size", 0)
+
+    for u, v, w, *_ in edges_keep:
+        mu = node_meta.get(u, {})
+        mv = node_meta.get(v, {})
+        for m in [mu, mv]:
+            org = m.get(_sx_org_key, "")
+            sex = m.get("sex", "")
+            if org and sex:
+                _grp_sex_ew.setdefault(org, {})
+                _grp_sex_ew[org][sex] = _grp_sex_ew[org].get(sex, 0.0) + w / 2
+
+    _grps_sx = sorted(
+        set(_grp_sex_ew) | set(_grp_sex_size),
+        key=lambda g: HIERARKI.get(g, 999) if _sx_org_key == "grp" else g
+    )
+
+    _tab_sx_abs, _tab_sx_pct = st.tabs(["Antal", "Andel (%)"])
+
+    with _tab_sx_abs:
+        _fig_sx = go.Figure()
+        for sex, label, color in [("k", "Kvinder", "#901a1E"), ("m", "Mænd", "#425570")]:
+            _fig_sx.add_trace(go.Bar(
+                name=label,
+                y=_grps_sx,
+                x=[_grp_sex_ew.get(g, {}).get(sex, 0) for g in _grps_sx],
+                orientation="h",
+                marker_color=color,
+                text=[f"{_grp_sex_ew.get(g, {}).get(sex, 0):.1f}" for g in _grps_sx],
+                textposition="inside",
+                hovertemplate="<b>%{y}</b><br>%{x:.1f} forfatterpar<extra></extra>",
+            ))
+        _fig_sx.update_layout(
+            barmode="stack",
+            xaxis_title="Forfatterpar",
+            height=max(300, 35 * len(_grps_sx)),
+            bargap=0.15,
+            margin=dict(l=200, r=40, t=20, b=20),
+            yaxis=dict(autorange="reversed"),
+            legend_title="Køn",
+        )
+        st.plotly_chart(_fig_sx, width="stretch", key=f"sx_abs_{year}_{mode}")
+
+    with _tab_sx_pct:
+        _fig_sx_pct = go.Figure()
+        for sex, label, color in [("k", "Kvinder", "#901a1E"), ("m", "Mænd", "#425570")]:
+            _pct_vals = []
+            for g in _grps_sx:
+                _tot = sum(_grp_sex_ew.get(g, {}).values()) or 1
+                _pct_vals.append(round(100 * _grp_sex_ew.get(g, {}).get(sex, 0) / _tot, 1))
+            _fig_sx_pct.add_trace(go.Bar(
+                name=label,
+                y=_grps_sx,
+                x=_pct_vals,
+                orientation="h",
+                marker_color=color,
+                text=[f"{v:.1f}%" for v in _pct_vals],
+                textposition="inside",
+                hovertemplate="<b>%{y}</b><br>%{x:.1f}%<extra></extra>",
+            ))
+        _fig_sx_pct.update_layout(
+            barmode="stack",
+            xaxis=dict(title="Andel (%)", range=[0, 100]),
+            height=max(300, 35 * len(_grps_sx)),
+            bargap=0.15,
+            margin=dict(l=200, r=40, t=20, b=20),
+            yaxis=dict(autorange="reversed"),
+            legend_title="Køn",
+        )
+        st.plotly_chart(_fig_sx_pct, width="stretch", key=f"sx_pct_{year}_{mode}")
+
+    _sx_rows = []
+    for g in _grps_sx:
+        row = {_sx_org_label: g}
+        total_ew = sum(_grp_sex_ew.get(g, {}).values()) or 1
+        for sex, label in [("k", "Kvinder"), ("m", "Mænd")]:
+            ew = _grp_sex_ew.get(g, {}).get(sex, 0.0)
+            row[f"{label} (forfatterpar)"] = round(ew, 1)
+            row[f"{label} (%)"] = round(100 * ew / total_ew, 1)
+        _sx_rows.append(row)
+
+    _sx_schema = [
+        (_sx_org_label,            pa.string()),
+        ("Kvinder (forfatterpar)", pa.float64()),
+        ("Kvinder (%)",            pa.float64()),
+        ("Mænd (forfatterpar)",    pa.float64()),
+        ("Mænd (%)",               pa.float64()),
+    ]
+    with st.expander("Se tabel"):
+        st.dataframe(build_table(_sx_rows, _sx_schema), hide_index=True, width="stretch")
+        st.download_button(
+            "Download (.xlsx)",
+            data=rows_to_excel_bytes(_sx_rows, [n for n, _ in _sx_schema]),
+            file_name=f"køn_{_sx_org_label.lower()}_{year}_{mode}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_køn_grp_{year}_{mode}",
+        )
 
 
     # ── Kanter per kønskombination ────────────────────────────────────────────
@@ -4736,15 +5765,19 @@ er indgået med **mandlige medforfattere** - og de resterende
         for combo in combos:
             fig2.add_trace(go.Bar(
                 name=combo_display.get(combo, combo),
-                x=orgs_sorted,
-                y=[org_combo[org].get(combo, 0) for org in orgs_sorted],
+                y=orgs_sorted,
+                x=[org_combo[org].get(combo, 0) for org in orgs_sorted],
+                orientation="h",
                 marker_color=combo_colors.get(combo, "#aaaaaa"),
                 text=[org_combo[org].get(combo, 0) for org in orgs_sorted],
                 textposition="inside",
             ))
         fig2.update_layout(
-            barmode="stack", xaxis_title=group_label,
-            yaxis_title="Antal forfatterpar", legend_title="Kønskombination", height=420,
+            barmode="stack", yaxis_title=group_label,
+            xaxis_title="Antal forfatterpar", legend_title="Kønskombination",
+            height=max(300, 60 * len(orgs_sorted)),
+            margin=dict(l=160, t=20, r=20),
+            yaxis=dict(autorange="reversed"),
         )
         st.plotly_chart(fig2, width="stretch")
 
@@ -4782,15 +5815,19 @@ er indgået med **mandlige medforfattere** - og de resterende
             ]
             fig2p.add_trace(go.Bar(
                 name=combo_display.get(combo, combo),
-                x=orgs_sorted, y=_pct_vals,
+                y=orgs_sorted, x=_pct_vals,
+                orientation="h",
                 marker_color=combo_colors.get(combo, "#aaaaaa"),
                 text=[f"{v}%" for v in _pct_vals],
                 textposition="inside",
             ))
         fig2p.update_layout(
-            barmode="stack", xaxis_title=group_label,
-            yaxis_title="Andel (%)", yaxis_range=[0, 100],
-            legend_title="Kønskombination", height=420,
+            barmode="stack", yaxis_title=group_label,
+            xaxis=dict(title="Andel (%)", range=[0, 100]),
+            legend_title="Kønskombination",
+            height=max(300, 60 * len(orgs_sorted)),
+            margin=dict(l=160, t=20, r=20),
+            yaxis=dict(autorange="reversed"),
         )
         st.plotly_chart(fig2p, width="stretch")
 
@@ -4824,7 +5861,7 @@ er indgået med **mandlige medforfattere** - og de resterende
         st.subheader("Udvikling over tid")
         years_sorted = sorted(all_years_data.keys())
 
-        _tab_bidrag, _tab_combo = st.tabs(["Forfatterbidrag per køn", "Sampublicering per kønskombination"])
+        _tab_bidrag, _tab_combo = st.tabs(["Forfatterbidrag per køn", "Forfatterpar per kønskombination"])
 
         with _tab_bidrag:
             _all_sexes = sorted({
@@ -4862,31 +5899,8 @@ er indgået med **mandlige medforfattere** - og de resterende
             )
             st.plotly_chart(fig_sb, width = "stretch")
 
-            sb_rows = []
-            for y in years_sorted:
-                sb = all_years_data[y].get("sex_bidrag", {})
-                row = {"År": y}
-                for sex in _all_sexes:
-                    row[sex_display.get(sex, sex)] = sb.get(sex, 0)
-                row["Total"] = sum(sb.get(sex, 0) for sex in _all_sexes)
-                sb_rows.append(row)
-
-            col_names = ["År"] + [sex_display.get(s, s) for s in _all_sexes] + ["Total"]
-            sb_schema = [(c, pa.int64()) for c in col_names]
-
-            with st.expander("Se tabel"):
-                st.dataframe(build_table(sb_rows, sb_schema), hide_index=True, width="stretch")
-                st.download_button(
-                    "Download (.xlsx)",
-                    data=rows_to_excel_bytes(sb_rows, col_names),
-                    file_name=f"forfatterbidrag_køn_{mode}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-
-
-        
         with _tab_combo:
-            st.markdown("Antal sampublikationer - ikke forfatterpar - per år.")
+            st.markdown("Antal forfatterpar per kønskombination per år. En publikation med fire forfattere giver seks forfatterpar.")
             _all_combos = sorted({
                 c for snap in all_years_data.values()
                 for c in snap.get("combo_pubs", {})
@@ -4913,12 +5927,47 @@ er indgået med **mandlige medforfattere** - og de resterende
 
             fig_cp.update_layout(
                 xaxis=dict(tickmode="array", tickvals=years_sorted, dtick=1),
-                yaxis_title="Antal publikationer",
+                yaxis_title="Antal forfatterbidrag",
                 legend_title="Kønskombination",
                 height=380,
                 margin=dict(t=2)
             )
             st.plotly_chart(fig_cp, width = "stretch")
+        
+        _all_sexes_o  = sorted({s for snap in all_years_data.values() for s in snap.get("sex_bidrag", {})})
+        _all_combos_o = sorted({c for snap in all_years_data.values() for c in snap.get("combo_pubs", {})})
+        
+        _o_rows = []
+        for y in years_sorted:
+            sb = all_years_data[y].get("sex_bidrag", {})
+            cp = all_years_data[y].get("combo_pubs", {})
+            row = {"År": y}
+            for sex in _all_sexes_o:
+                row[f"Bidrag – {sex_display.get(sex, sex)}"] = sb.get(sex, 0)
+            row["Bidrag – Total"] = sum(sb.get(sex, 0) for sex in _all_sexes_o)
+            for combo in _all_combos_o:
+                row[f"Par – {combo_display.get(combo, combo)}"] = cp.get(combo, 0)
+            row["Par – Total"] = sum(cp.get(combo, 0) for combo in _all_combos_o)
+            _o_rows.append(row)
+
+        _o_col_names = (
+            ["År"]
+            + [f"Bidrag – {sex_display.get(s, s)}" for s in _all_sexes_o]
+            + ["Bidrag – Total"]
+            + [f"Par – {combo_display.get(c, c)}" for c in _all_combos_o]
+            + ["Par – Total"]
+        )
+        _o_schema = [("År", pa.int64())] + [(c, pa.int64()) for c in _o_col_names[1:]]
+
+        with st.expander("Se tabel"):
+            st.dataframe(build_table(_o_rows, _o_schema), hide_index=True, width="stretch")
+            st.download_button(
+                "Download (.xlsx)",
+                data=rows_to_excel_bytes(_o_rows, _o_col_names),
+                file_name=f"køn_overblik_{mode}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_køn_overblik_{year}_{mode}",
+            )
 
 
 
@@ -5109,7 +6158,7 @@ dermed uafhængige af den aktuelle netværksvisning.
     all_cs_sorted = sorted(cs_total.items(), key=lambda x: -x[1])
     max_n         = len(all_cs_sorted)
     if max_n == 0:
-        st.info("Ingen nationalitetsdata tilgængelig for det valgte udsnit.")
+        st.error("Ingen nationalitetsdata tilgængelig for det valgte udsnit.")
         return
 
     top_n = st.number_input(
@@ -5365,7 +6414,7 @@ kanter, hvor begge endepunkter har en kendt nationalitet, medtages."""
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
     else:
-        st.info("Ingen kanter med kendte nationaliteter for begge endepunkter i det valgte udsnit.")
+        st.error("Ingen kanter med kendte nationaliteter for begge endepunkter i det valgte udsnit.")
 
     # ── Sampubliceringer per nationalitetskombination ─────────────────────────
     st.markdown("#### Sampubliceringer per nationalitetskombination")
@@ -5594,6 +6643,6 @@ kanter, hvor begge endepunkter har en kendt nationalitet, medtages."""
                 key=f"dl_nat_pairs_{year}_{mode}",
             )
     else:
-        st.info("Ingen kanter med kendte nationaliteter for begge endepunkter i det valgte udsnit.")
+        st.error("Ingen kanter med kendte nationaliteter for begge endepunkter i det valgte udsnit.")
 if __name__ == "__main__":
     main()
