@@ -2227,18 +2227,19 @@ def main():
 
         return merged
     
-    ku_farver    = load_ku_colors()
-    faculty_base_colors = build_faculty_colors(ku_farver)
-    grp_colors = stillingsgruppe_colors(ku_farver)
+    with st.spinner("Indlæser data..."):
+        ku_farver = load_ku_colors()
+        faculty_base_colors = build_faculty_colors(ku_farver)
+        grp_colors = stillingsgruppe_colors(ku_farver)
 
-    SVG_CENTRALITET  = load_svg("fig_centralitet_v4.svg")
-    SVG_FORFATTERPAR = load_svg("fig_forfatterpar.svg")
+        SVG_CENTRALITET  = load_svg("fig_centralitet_v4.svg")
+        SVG_FORFATTERPAR = load_svg("fig_forfatterpar.svg")
 
-    forfatterpositioner = load_forfatterpositioner()
-    ku_totals = load_ku_totals()
-    _, inst_to_fac = load_inst_filter()
-    forfatterantal_data    = load_forfatterantal()
-    publikationstyper_data = load_publikationstyper()
+        forfatterpositioner = load_forfatterpositioner()
+        ku_totals = load_ku_totals()
+        _, inst_to_fac = load_inst_filter()
+        forfatterantal_data    = load_forfatterantal()
+        publikationstyper_data = load_publikationstyper()
 
     # -----------------------------------------------------------------------
     # Page config & header
