@@ -768,7 +768,7 @@ def apply_mode_merge(mode: str, raw_nodes: dict, raw_edges: list):
         return {nid: m for nid, m in nm.items() if m.get("type") == "inst"}, es
     elif _base == "G":
         if nat_in_mode(mode):
-            # Bevar rå grp-noder med nationalitet — _needs_aggregation splitter dem korrekt
+            # Bevar rå grp-noder med nationalitet - _needs_aggregation splitter dem korrekt
             return {nid: m for nid, m in raw_nodes.items() if m.get("type") == "grp"}, list(raw_edges)
         if _sex:
             return merge_grp_by_sex(raw_nodes, raw_edges)
@@ -1152,7 +1152,7 @@ def compute_layout(nodes_keep: set, node_meta: dict, mode: str, network_scale: i
                     key=lambda n: node_meta[n].get("sex", "m")  # k før m (k < m alfabetisk)
                 )
                 n_pair = len(pair)
-                angle_gap = 0.38  # radianer mellem k og m — juster efter smag
+                angle_gap = 0.38  # radianer mellem k og m - juster efter smag
                 for p_idx, nid2 in enumerate(pair):
                     offset_angle = angle_gap * (p_idx - (n_pair - 1) / 2)
                     t = theta + offset_angle
@@ -1284,7 +1284,7 @@ def compute_layout(nodes_keep: set, node_meta: dict, mode: str, network_scale: i
             sex  = m.get("sex", "")
             _bm  = base_mode(mode)
 
-            # SF*-modes: k til venstre, m til højre — gælder ALLE modes med F+S
+            # SF*-modes: k til venstre, m til højre - gælder ALLE modes med F+S
             if sex_in_mode(mode) and sex and "F" in _bm:
                 cx, cy = fac_centers.get(fac, (0, 0))
                 fac_insts = sorted({
@@ -3296,7 +3296,7 @@ f"""
 **Hvad viser cirklerne?** 
 
 Hver cirkel repræsenterer en organisatorisk enhed på det valgte niveau. 
-Cirklens størrelse afspejler antallet af unikke forfatterbidrag: jo større cirkel, jo flere forfatterbidragbidrag. 
+Cirklens størrelse afspejler antallet af unikke forfatterbidrag: jo større cirkel, jo flere forfatterbidrag. 
 Farverne følger fakultetstilhørsforholdet.
 
 **Hvad viser linjerne?**
@@ -3320,13 +3320,13 @@ publikations kvalitet.
 Når du læser figuren, kan det være brugbart at spørge: 
 
 - Hvilke enheder fungere som **knudepunkter** med mange forbindelser?
-- Er samarbejedet koncentreret omkring få enheder - eller relativt bredt fordelt? 
+- Er samarbejdet koncentreret omkring få enheder - eller relativt bredt fordelt? 
 - Domineres netværket af samarbejde **inden for** eller **på tværs af** organisatoriske enheder? 
 
 Netværket viser **relationer**, ikke årsager: tætte forbindelser kan afspejle både strategisk samarbejde, faglig afhængighed
 eller strukturelle forhold.
 
-**Tip:** Klik på en cirkel for at se dens detaljer og nærmeste samarbedspartnere i panelet i højre hjørne.
+**Tip:** Klik på en cirkel for at se dens detaljer og nærmeste samarbejdspartnere i panelet i højre hjørne.
 """)
 
     st.components.v1.html(html, height=800, scrolling=True)
@@ -3668,7 +3668,7 @@ def _render_share_comparison(org_tot: dict, org_ew: dict, org_label: str, title:
 ### Andel af forfatterbidrag vs. andel af forfatterpar
 Figuren viser forholdet mellem en enheds andel af alle forfatterbidrag (x-aksen) og enhedens
 andel af de samlede forfatterpar (y-aksen). Punkter over diagonalen indikerer enheder,
-der bidrager til relativt flere forfatterpar end deres størrelse tilsiger — dvs. enheder der
+der bidrager til relativt flere forfatterpar end deres størrelse tilsiger - dvs. enheder der
 samarbejder mere end forventet. Punkter under diagonalen indikerer det modsatte.
 """
 )
@@ -4085,9 +4085,11 @@ Fanen giver et samlet overblik over KU's sampubliceringsaktivitet i **{year}**, 
 **{_mode_labels.get(mode, mode)}**.
 
 **Sampublikationer** er publikationer med mindst to KU-VIP-forfattere. 
-**Forfatterpar** tæller hver unik kombination af to forfattere på én publikation - en artikel med fire forfattere
-giver altså seks forfatterpar. 
-**Forfatterbidrag** er summen af unikke forfattere i sampublikationer.
+**Forfatterpar** tæller hver unik kombination af to forfattere på én publikation - 
+en artikel med fire forfattere giver altså seks forfatterpar. 
+**Forfatterbidrag** er antallet af unikke KU-VIP-forskere knyttet til enheden - 
+tæller hver forsker én gang, uanset hvor mange publikationer de står på, og 
+uanset om de har skrevet soloartikler eller sampublikationer.
 **Sampubliceringsrate** er forfatterpar divideret med forfatterbidrag.
 """)
 
@@ -4098,7 +4100,7 @@ giver altså seks forfatterpar.
                   help="Antal publikationer med mindst to VIP-forfattere")
     with col2:
         st.metric("Unikke forfatterbidrag", int(total_authors),
-                  help="Summen af forfatterbidrag for alle noder i det filtrerede netværk")
+                  help="Antal unikke KU-VIP-forskere i udsnittet (hver forsker tælles én gang, uanset antal publikationer).")
     with col3:
         _rate = round(total_pubs / total_authors, 2) if total_authors else 0.0
         st.metric("Sampubliceringsrate", _rate,
@@ -4514,7 +4516,7 @@ men udelader par med 0 forfatterpar i første år.""")
 
         with _tab_rel_growth:
             if not _growth_rel:
-                st.info("Ingen par har forfatterpar i første år — relativ ændring kan ikke beregnes.")
+                st.info("Ingen par har forfatterpar i første år - relativ ændring kan ikke beregnes.")
             else:
                 _fig, _tbl_rows, _tbl_schema = _make_growth_fig(
                     _growth_rel,
@@ -4828,63 +4830,188 @@ f"""
 
     st.markdown("---")
 
+    # ── Samarbejdsmønstre på tværs af fakulteter (heatmap) ───────────────────
     st.markdown(
-f"""
-#### Fakulteternes rækkevidde i {year}
+f"""#### Samarbejdsmønstre på tværs af fakulteter i {year}
 
-**Rækkevidde** måler, hvor mange *forskellige* fakulteter et fakultet samarbejder med - uanset hvor meget 
-de samarbejder. Et fakultet kan have mange forfatterpar, men hvis de primært er koncentreres om én eller 
-to partnere, er rækkevidden lav. En bred rækkevidde indikerer et diverst samarbejdsmønster på tværs af KU. 
+Heatmappet viser, **hvilke fakulteter der publicerer sammen** - og hvor intensivt.
+
+- **Antal forfatterpar** viser den rå trafik mellem to fakulteter. Store fakulteter dominerer naturligt.
+- **Forfatterpar per forfatterbidrag** svarer på spørgsmålet: *hvor ofte er en forfatter fra kolonnen 
+med, når nogen fra rækken publicerer?* Matricen er ikke symmetrisk - cellen (SUND, SCIENCE) og cellen 
+(SCIENCE, SUND) svarer på to forskellige spørgsmål. Hvis SUND har 15% af sine par med SCIENCE, mens 
+SCIENCE kun har 8% med SUND, er SUND mere afhængig af SCIENCE end omvendt.
+- **Andel (%) per række** viser for hvert fakultet, hvor dets samarbejder fordeler sig. Hver række 
+summerer til 100%.
+
+**Bemærk:** Ratioen kan være større end 1. Ét forfatterbidrag kan indgå i flere par - hvis en 
+SUND-forsker er medforfatter på en artikle med tre SCIENCE-forskere, genererer det ét bidrag for 
+SUND men tre par med SCIENCE. Store forfatterskaber (f.eks. artikler med 100+ forfattere) 
+kan derfor skævvride billedet.
 """)
 
-    _fac_partners: dict[str, set] = {}
-    for u, v, w, *_ in edges_keep:
-        fac_u = node_meta.get(u, {}).get("fac", "")
-        fac_v = node_meta.get(v, {}).get("fac", "")
-        if fac_u and fac_v and fac_u != fac_v:
-            _fac_partners.setdefault(fac_u, set()).add(fac_v)
-            _fac_partners.setdefault(fac_v, set()).add(fac_u)
+    _use_fac_hm_all = st.toggle(
+        "Inkludér intra-fakultet forfatterpar (f.eks. to forskere på samme SUND-institut)",
+        value=False,
+        key=f"fac_hm_all_{year}_{mode}",
+        help="Til: alle forfatterpar inkl. par inden for samme fakultet. Fra: kun par mellem fakulteter.",
+    )
 
-    _all_facs = {
-        node_meta.get(nid, {}).get("fac", "")
-        for nid in node_meta
-        if node_meta.get(nid, {}).get("fac")
-    }
-    _max_reach = len(_all_facs) - 1
+    # Byg par-matrix fra kanterne. Halveret vægt (w/2) matcher bar-chart-ratioen ovenfor.
+    _fac_pair_matrix: dict[tuple[str, str], float] = {}
+    for u, v, w, *_ in (edges_keep or []):
+        fu = (node_meta or {}).get(u, {}).get("fac", "")
+        fv = (node_meta or {}).get(v, {}).get("fac", "")
+        if not fu or not fv:
+            continue
+        if fu == fv and not _use_fac_hm_all:
+            continue  # spring intra-fakultet par over hvis toggle er slået fra
+        _fac_pair_matrix[(fu, fv)] = _fac_pair_matrix.get((fu, fv), 0.0) + w / 2
+        if fu != fv:
+            _fac_pair_matrix[(fv, fu)] = _fac_pair_matrix.get((fv, fu), 0.0) + w / 2
 
-    _reach_sorted = [(f, len(_fac_partners.get(f, set()))) for f in _facs_ord]
+    # Hvis intra-fakultet toggle er på, brug pre-computede intra-par på diagonalen
+    if _use_fac_hm_all and all_years_data and year in all_years_data:
+        _fac_intra_src = all_years_data[year].get("fac_intra_ew_all", {})
+        for f, v in _fac_intra_src.items():
+            if f in fac_tot_size:
+                # Overskriv diagonalen med den pre-computede værdi (bidrag fra edges_keep er inkonsistent for intra)
+                _fac_pair_matrix[(f, f)] = v
 
-    if any(n > 0 for _, n in _reach_sorted):
-        _reach_facs   = [f for f, _ in _reach_sorted]
-        _reach_vals   = [n for _, n in _reach_sorted]
-        _reach_colors = [faculty_base_colors.get(f, "#122947") if faculty_base_colors else "#122947" for f in _reach_facs]
+    _hm_facs = [f for f in _facs_ord if f in fac_tot_size]
+    _intra_suffix_fac_hm = ' (inkl. intra-fakultet)' if _use_fac_hm_all else ''
 
-        # Analytisk tekst
-        _reach_top, _reach_top_n = _reach_sorted[0]
-        _reach_bot, _reach_bot_n = _reach_sorted[-1]
-        
-        _fig_reach = go.Figure(go.Bar(
-            y=_reach_facs, x=_reach_vals,
-            orientation="h",
-            marker_color=_reach_colors,
-            text=[f"{v} / {_max_reach}" for v in _reach_vals],
-            textposition="inside",
-        ))
-        _fig_reach.update_layout(
-            xaxis=dict(title="Antal samarbejdsfakulteter", range=[0, _max_reach + 0.5], dtick=1),
-            height=max(300, 50 * len(_reach_facs)),
-            margin=dict(l=80, t=50, r=80),
-            yaxis=dict(autorange="reversed"),
-            title = f"Fakulteternes rækkevidde, {year}"
+    if len(_hm_facs) < 2 or not _fac_pair_matrix:
+        st.info("Ikke tilstrækkeligt data til at vise samarbejdsmatrix for det valgte udsnit.")
+    else:
+        _z_abs_fac = [[round(_fac_pair_matrix.get((fi, fj), 0.0), 1) for fj in _hm_facs] for fi in _hm_facs]
+        _z_ratio_fac = [
+            [round(_fac_pair_matrix.get((fi, fj), 0.0) / (fac_tot_size.get(fi) or 1), 3) for fj in _hm_facs]
+            for fi in _hm_facs
+        ]
+        _z_row_pct_fac = []
+        for fi in _hm_facs:
+            _row_total = sum(_fac_pair_matrix.get((fi, fj), 0.0) for fj in _hm_facs) or 1
+            _z_row_pct_fac.append([
+                round(100 * _fac_pair_matrix.get((fi, fj), 0.0) / _row_total, 2)
+                for fj in _hm_facs
+            ])
+
+        _tab_hm_abs_fac, _tab_hm_ratio_fac, _tab_hm_pct_fac = st.tabs(
+            ["Antal forfatterpar", "Forfatterpar per forfatterbidrag", "Andel (%) per række"]
         )
-        st.plotly_chart(_fig_reach, width="stretch", key=f"fac_reach_{year}_{mode}",
-        config={
-            "toImageButtonOptions": {
-                "format": "png",
-                "scale": 3,
-            }
-        }
-        )
+
+        def _fac_heatmap_fig(z, title, colorbar_title, text_fmt, hover_template):
+            _text = [[text_fmt(v) for v in row] for row in z]
+            fig = go.Figure(go.Heatmap(
+                z=z, x=_hm_facs, y=_hm_facs,
+                colorscale=[[0, "#f0f4f8"], [1, "#122947"]],
+                text=_text, texttemplate="%{text}",
+                textfont=dict(size=12),
+                hovertemplate=hover_template,
+                colorbar=dict(title=colorbar_title),
+            ))
+            fig.update_layout(
+                title=title,
+                xaxis=dict(title="", tickangle=0),
+                yaxis=dict(title="", autorange="reversed"),
+                height=70 * len(_hm_facs),
+                margin=dict(l=100, t=60, r=80, b=80),
+            )
+            return fig
+
+        with _tab_hm_abs_fac:
+            st.plotly_chart(
+                _fac_heatmap_fig(
+                    _z_abs_fac,
+                    f"Antal forfatterpar mellem fakulteter{_intra_suffix_fac_hm}, {year}",
+                    "Antal par",
+                    lambda v: fmt_ui(v) if v else "",
+                    "<b>%{y}</b> og <b>%{x}</b><br>"
+                    "Antal forfatterpar: <b>%{z}</b>"
+                    "<extra></extra>",
+                ),
+                width="stretch",
+                key=f"fac_hm_abs_{year}_{mode}",
+                config={"toImageButtonOptions": {"format": "png", "scale": 3}},
+            )
+            st.caption(
+                "Symmetrisk matrix: par(A,B) = par(B,A). Diagonalen viser intra-fakultet-samarbejde "
+                "og vises kun, hvis intra-fakultet-toggle er aktiveret."
+            )
+
+        with _tab_hm_ratio_fac:
+            st.plotly_chart(
+                _fac_heatmap_fig(
+                    _z_ratio_fac,
+                    f"Forfatterpar per forfatterbidrag mellem fakulteter{_intra_suffix_fac_hm}, {year}",
+                    "Par per bidrag",
+                    lambda v: fmt_ui(v, 2) if v else "",
+                    "Per forfatterbidrag fra <b>%{y}</b><br>"
+                    "dannes i gennemsnit <b>%{z}</b> par med <b>%{x}</b>"
+                    "<extra></extra>",
+                ),
+                width="stretch",
+                key=f"fac_hm_ratio_{year}_{mode}",
+                config={"toImageButtonOptions": {"format": "png", "scale": 3}},
+            )
+            st.caption(
+                "**Asymmetrisk matrix.** Rækken normaliseres med fakultetets antal forfatterbidrag. "
+                "Høje værdier indikerer intensiv samarbejdsrelation relativt til fakultetets størrelse."
+            )
+
+        with _tab_hm_pct_fac:
+            st.plotly_chart(
+                _fac_heatmap_fig(
+                    _z_row_pct_fac,
+                    f"Fordeling af samarbejdspartnere per fakultet{_intra_suffix_fac_hm}, {year}",
+                    "Andel (%)",
+                    lambda v: f"{fmt_ui(v, 1)}%" if v else "",
+                    "<b>%{z:.2f}%</b> af <b>%{y}</b>'s forfatterpar<br>"
+                    "er med <b>%{x}</b>"
+                    "<extra></extra>",
+                ),
+                width="stretch",
+                key=f"fac_hm_pct_{year}_{mode}",
+                config={"toImageButtonOptions": {"format": "png", "scale": 3}},
+            )
+            st.caption(
+                "Hver række summerer til 100%. Viser hvor et fakultets samarbejdspar *fordeler sig* "
+                "på tværs af andre fakulteter - uafhængigt af fakultetets størrelse."
+            )
+
+        # ── Tabel (langt format) ──────────────────────────────────────────────
+        _fac_hm_rows = []
+        for fi in _hm_facs:
+            _row_total = sum(_fac_pair_matrix.get((fi, fj), 0.0) for fj in _hm_facs) or 1
+            _bidrag_i = fac_tot_size.get(fi) or 1
+            for fj in _hm_facs:
+                _pairs = _fac_pair_matrix.get((fi, fj), 0.0)
+                if _pairs == 0:
+                    continue
+                _fac_hm_rows.append({
+                    "Fra (række)":                 fi,
+                    "Til (kolonne)":               fj,
+                    "Forfatterpar":                round(_pairs, 1),
+                    "Par per forfatterbidrag":     round(_pairs / _bidrag_i, 3),
+                    "Andel af rækkens par (%)":    round(100 * _pairs / _row_total, 2),
+                })
+        _fac_hm_schema = [
+            ("Fra (række)",              pa.string()),
+            ("Til (kolonne)",            pa.string()),
+            ("Forfatterpar",             pa.float64()),
+            ("Par per forfatterbidrag",  pa.float64()),
+            ("Andel af rækkens par (%)", pa.float64()),
+        ]
+        with st.expander("Se tabel"):
+            st.dataframe(build_table(_fac_hm_rows, _fac_hm_schema), hide_index=True, width="stretch")
+            st.download_button(
+                "Download (.xlsx)",
+                data=rows_to_excel_bytes(_fac_hm_rows, [n for n, _ in _fac_hm_schema]),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_fac_hm_{year}_{mode}",
+            )
+
 
 
     st.markdown("---")
@@ -4900,7 +5027,7 @@ de tilgængelige år. Brug fanerne til at skifte mellem de tre opgørelsesformer
     _facs_ew_in_data = sorted({f for s in (all_years_data or {}).values() for f in s.get("fac_ew", {})})
     years_sorted_fac = sorted((all_years_data or {}).keys())
 
-    _tab_yr_tot, _tab_yr_ew, _tab_yr_reach = st.tabs(["Forfatterbidrag per fakultet", "Forfatterpar per fakultet", "Fakulteternes rækkevidde"])
+    _tab_yr_tot, _tab_yr_ew = st.tabs(["Forfatterbidrag per fakultet", "Forfatterpar per fakultet"])
 
     with _tab_yr_tot:
         _render_year_comparison(
@@ -4939,22 +5066,6 @@ de tilgængelige år. Brug fanerne til at skifte mellem de tre opgørelsesformer
             show_table=True,
         )
     
-    with _tab_yr_reach: 
-        _facs_reach_in_data = sorted({
-            f
-            for s in (all_years_data or {}).values()
-            for f in s.get("fac_reach", {})
-        })
-        _render_year_comparison(
-            all_years_data,
-            series=[(fac, "fac_reach", fac) for fac in _facs_reach_in_data],
-            title=f"Udvikling i fakulteternes ræddevidde, {years_sorted_fac[0]}-{years_sorted_fac[-1]}",
-            yaxis_label="Antal samarbejdspartnere",
-            colors=faculty_base_colors,
-            key_suffix=f"fac_reach_{year}_{mode}",
-            show_table=True,
-        )
-
     st.markdown("---")
 
     if fac_ew and _grand_ew:
@@ -5480,6 +5591,229 @@ de samarbejder. En bred rækkevidde indikerer et diverst samarbejdsmønster på 
             key=f"dl_inst_raekkevidde_{year}_{mode}",
         )
     
+
+    st.markdown("---")
+
+    # ── Samarbejdsmønstre på tværs af institutter (heatmap) ──────────────────
+    st.markdown(
+f"""#### Samarbejdsmønstre på tværs af institutter i {year}
+
+Heatmappet viser, **hvilke institutter der publicerer sammen** - og hvor intensivt.
+
+- **Antal forfatterpar** viser den rå trafik mellem to institutter. Store institutter dominerer naturligt.
+- **Forfatterpar per forfatterbidrag** svarer på spørgsmålet: *hvor ofte er en forfatter fra kolonnen 
+med, når nogen fra rækken publicerer?* Matricen er ikke symmetrisk - cellen (A, B) og cellen (B, A) 
+svarer på to forskellige spørgsmål. Et lille institut kan have høj andel af sine par med et stort 
+institut, uden at det omvendte gælder.
+- **Andel (%) per række** viser for hvert institut, hvor dets samarbejder fordeler sig. Hver række 
+summerer til 100%.
+
+**Bemærk:** Ratioen kan være større end 1. Ét forfatterbidrag kan indgå i flere par - hvis en 
+forsker er medforfatter på et paper med tre forskere fra et andet institut, genererer det ét bidrag 
+men tre par med det andet institut. Store forfatterskaber (f.eks. artikler med 100+ 
+forfattere) kan derfor skævvride billedet.
+""")
+
+    # Bestem hvilke institutter der skal indgå i heatmappet.
+    # Hvis brugeren har filtreret på fakultet(er) ovenfor, bruges alle institutter fra de valgte fakulteter.
+    # Ellers skal brugeren vælge institutter manuelt, da et 50+ × 50+ heatmap er ulæseligt.
+    _hm_inst_candidates = [i for i in inst_tot_size if _fac_ok(i)]
+
+    if _fac_filter:
+        # Fakultets-filter er aktivt: brug alle institutter under de valgte fakulteter
+        _hm_insts_selected = sorted(_hm_inst_candidates, key=lambda i: -inst_tot_size.get(i, 0))
+        st.caption(
+            f"Heatmappet viser alle institutter under **{', '.join(_fac_filter)}** "
+            f"({len(_hm_insts_selected)} institutter)."
+        )
+    else:
+        # Intet fakultets-filter: lad brugeren vælge institutter direkte
+        st.markdown(
+            "Uden et fakultets-filter er der for mange institutter til at vise meningsfuldt. "
+            "Vælg enten et fakultet i filtret ovenfor, eller vælg institutter direkte her:"
+        )
+        _default_top_n = sorted(_hm_inst_candidates, key=lambda i: -inst_tot_size.get(i, 0))[:10]
+        _hm_insts_selected = st.multiselect(
+            "**Vælg institutter til heatmap**",
+            options=sorted(_hm_inst_candidates),
+            default=_default_top_n,
+            key=f"inst_hm_select_{year}_{mode}",
+            help="Default: de 10 institutter med flest forfatterbidrag. Ryd feltet og tilføj dine egne valg.",
+        )
+
+    _use_inst_hm_all = st.toggle(
+        "Inkludér intra-institut forfatterpar (f.eks. to professorer på samme institut)",
+        value=False,
+        key=f"inst_hm_all_{year}_{mode}",
+        help="Til: alle forfatterpar inkl. par inden for samme institut. Fra: kun par mellem institutter.",
+    )
+
+    # Byg par-matrix fra kanterne. Halveret vægt (w/2) matcher bar-chart-ratioen ovenfor.
+    _inst_pair_matrix: dict[tuple[str, str], float] = {}
+    _selected_set = set(_hm_insts_selected)
+    for u, v, w, *_ in (edges_keep or []):
+        iu = (node_meta or {}).get(u, {}).get("inst", "")
+        iv = (node_meta or {}).get(v, {}).get("inst", "")
+        if not iu or not iv:
+            continue
+        if iu not in _selected_set or iv not in _selected_set:
+            continue  # Begge endepunkter skal være blandt de valgte institutter
+        if iu == iv and not _use_inst_hm_all:
+            continue  # spring intra-institut par over hvis toggle er slået fra
+        _inst_pair_matrix[(iu, iv)] = _inst_pair_matrix.get((iu, iv), 0.0) + w / 2
+        if iu != iv:
+            _inst_pair_matrix[(iv, iu)] = _inst_pair_matrix.get((iv, iu), 0.0) + w / 2
+
+    # Hvis intra-institut toggle er på, brug pre-computede intra-par på diagonalen
+    if _use_inst_hm_all and all_years_data and year in all_years_data:
+        _inst_intra_src = all_years_data[year].get("inst_intra_ew_all", {})
+        for i, v in _inst_intra_src.items():
+            if i in _selected_set:
+                _inst_pair_matrix[(i, i)] = v
+
+    _intra_suffix_inst_hm = ' (inkl. intra-institut)' if _use_inst_hm_all else ''
+
+    if len(_hm_insts_selected) < 2:
+        st.info("Vælg mindst to institutter for at vise samarbejdsmatrix.")
+    elif not _inst_pair_matrix:
+        st.info("Ingen forfatterpar mellem de valgte institutter i det valgte udsnit.")
+    else:
+        # Sortér valgte institutter efter størrelse (størst først) for konsistent visning
+        _hm_insts_ordered = sorted(_hm_insts_selected, key=lambda i: -inst_tot_size.get(i, 0))
+
+        _z_abs_inst = [[round(_inst_pair_matrix.get((ii, ij), 0.0), 1) for ij in _hm_insts_ordered] for ii in _hm_insts_ordered]
+        _z_ratio_inst = [
+            [round(_inst_pair_matrix.get((ii, ij), 0.0) / (inst_tot_size.get(ii) or 1), 3) for ij in _hm_insts_ordered]
+            for ii in _hm_insts_ordered
+        ]
+        _z_row_pct_inst = []
+        for ii in _hm_insts_ordered:
+            _row_total = sum(_inst_pair_matrix.get((ii, ij), 0.0) for ij in _hm_insts_ordered) or 1
+            _z_row_pct_inst.append([
+                round(100 * _inst_pair_matrix.get((ii, ij), 0.0) / _row_total, 2)
+                for ij in _hm_insts_ordered
+            ])
+
+        _tab_hm_abs_inst, _tab_hm_ratio_inst, _tab_hm_pct_inst = st.tabs(
+            ["Antal forfatterpar", "Forfatterpar per forfatterbidrag", "Andel (%) per række"]
+        )
+
+        def _inst_heatmap_fig(z, title, colorbar_title, text_fmt, hover_template):
+            _text = [[text_fmt(v) for v in row] for row in z]
+            # Højde skaleres med antal valgte institutter; bredde låst til container
+            _n = len(_hm_insts_ordered)
+            fig = go.Figure(go.Heatmap(
+                z=z, x=_hm_insts_ordered, y=_hm_insts_ordered,
+                colorscale=[[0, "#f0f4f8"], [1, "#122947"]],
+                text=_text, texttemplate="%{text}",
+                textfont=dict(size=10 if _n > 15 else 11),
+                hovertemplate=hover_template,
+                colorbar=dict(title=colorbar_title),
+            ))
+            fig.update_layout(
+                title=title,
+                xaxis=dict(title="", tickangle=-45),
+                yaxis=dict(title="", autorange="reversed"),
+                height=max(400, 60 * _n),
+                margin=dict(l=250, t=60, r=80, b=200),
+            )
+            return fig
+
+        with _tab_hm_abs_inst:
+            st.plotly_chart(
+                _inst_heatmap_fig(
+                    _z_abs_inst,
+                    f"Antal forfatterpar mellem institutter{_intra_suffix_inst_hm}, {year}",
+                    "Antal par",
+                    lambda v: fmt_ui(v) if v else "",
+                    "<b>%{y}</b> og <b>%{x}</b><br>"
+                    "Antal forfatterpar: <b>%{z}</b>"
+                    "<extra></extra>",
+                ),
+                width="stretch",
+                key=f"inst_hm_abs_{year}_{mode}",
+                config={"toImageButtonOptions": {"format": "png", "scale": 3}},
+            )
+            st.caption(
+                "Symmetrisk matrix: par(A,B) = par(B,A). Diagonalen viser intra-institut-samarbejde "
+                "og vises kun, hvis intra-institut-toggle er aktiveret."
+            )
+
+        with _tab_hm_ratio_inst:
+            st.plotly_chart(
+                _inst_heatmap_fig(
+                    _z_ratio_inst,
+                    f"Forfatterpar per forfatterbidrag mellem institutter{_intra_suffix_inst_hm}, {year}",
+                    "Par per bidrag",
+                    lambda v: fmt_ui(v, 2) if v else "",
+                    "Per forfatterbidrag fra <b>%{y}</b><br>"
+                    "dannes i gennemsnit <b>%{z}</b> par med <b>%{x}</b>"
+                    "<extra></extra>",
+                ),
+                width="stretch",
+                key=f"inst_hm_ratio_{year}_{mode}",
+                config={"toImageButtonOptions": {"format": "png", "scale": 3}},
+            )
+            st.caption(
+                "**Asymmetrisk matrix.** Rækken normaliseres med instituttets antal forfatterbidrag. "
+                "Høje værdier indikerer intensiv samarbejdsrelation relativt til instituttets størrelse."
+            )
+
+        with _tab_hm_pct_inst:
+            st.plotly_chart(
+                _inst_heatmap_fig(
+                    _z_row_pct_inst,
+                    f"Fordeling af samarbejdspartnere per institut{_intra_suffix_inst_hm}, {year}",
+                    "Andel (%)",
+                    lambda v: f"{fmt_ui(v, 1)}%" if v else "",
+                    "<b>%{z:.2f}%</b> af <b>%{y}</b>s forfatterpar<br>"
+                    "er med <b>%{x}</b>"
+                    "<extra></extra>",
+                ),
+                width="stretch",
+                key=f"inst_hm_pct_{year}_{mode}",
+                config={"toImageButtonOptions": {"format": "png", "scale": 3}},
+            )
+            st.caption(
+                "Hver række summerer til 100%. Viser hvor et instituts samarbejdspar *fordeler sig* "
+                "på tværs af de valgte institutter - uafhængigt af instituttets størrelse."
+            )
+
+        # ── Tabel (langt format) ──────────────────────────────────────────────
+        _inst_hm_rows = []
+        for ii in _hm_insts_ordered:
+            _row_total = sum(_inst_pair_matrix.get((ii, ij), 0.0) for ij in _hm_insts_ordered) or 1
+            _bidrag_i = inst_tot_size.get(ii) or 1
+            for ij in _hm_insts_ordered:
+                _pairs = _inst_pair_matrix.get((ii, ij), 0.0)
+                if _pairs == 0:
+                    continue
+                _inst_hm_rows.append({
+                    "Fra (række)":                 ii,
+                    "Til (kolonne)":               ij,
+                    "Forfatterpar":                round(_pairs, 1),
+                    "Par per forfatterbidrag":     round(_pairs / _bidrag_i, 3),
+                    "Andel af rækkens par (%)":    round(100 * _pairs / _row_total, 2),
+                })
+        _inst_hm_schema = [
+            ("Fra (række)",              pa.string()),
+            ("Til (kolonne)",            pa.string()),
+            ("Forfatterpar",             pa.float64()),
+            ("Par per forfatterbidrag",  pa.float64()),
+            ("Andel af rækkens par (%)", pa.float64()),
+        ]
+        with st.expander("Se tabel"):
+            st.dataframe(build_table(_inst_hm_rows, _inst_hm_schema), hide_index=True, width="stretch")
+            st.download_button(
+                "Download (.xlsx)",
+                data=rows_to_excel_bytes(_inst_hm_rows, [n for n, _ in _inst_hm_schema]),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_inst_hm_{year}_{mode}",
+            )
+
+
+
+
     st.markdown("---")
     
     # ── Sammenlign år ─────────────────────────────────────────────────────────
@@ -5631,7 +5965,7 @@ def render_pos_chart(pos_counts: dict, tab_key: str, year: int, mode: str, grp_t
     _pos_colors = ["#bac7d9", "#425570", "#901a1E"]
     pos_labels = [("first", "Førsteforfatter"), ("middle", "Mellemforfatter"), ("last", "Sidsteforfatter")]
 
-    _tab_abs, _tab_pct, _tab_rate = st.tabs(["Antal", "Andel (%)", "Rate (per forsker)"])
+    _tab_abs, _tab_pct, _tab_rate = st.tabs(["Antal", "Andel (%)", "Rate (per forfatter)"])
 
     with _tab_abs:
         fig = go.Figure()
@@ -5697,7 +6031,7 @@ def render_pos_chart(pos_counts: dict, tab_key: str, year: int, mode: str, grp_t
     )
 
     with _tab_rate:
-        st.markdown("Antal gange en typisk forsker i gruppen optræder i hver forfatterposition - beregnet som antal positioner divideret med antal unikke forfatterbidrag i gruppen.")
+        st.markdown("Antal gange en typisk forfatter i gruppen optræder i hver forfatterposition - beregnet som antal positioner divideret med antal unikke forfatterbidrag i gruppen.")
         if not grp_tot_size:
             st.error("Forfatterbidrag per stillingsgruppe ikke tilgængeligt - rate kan ikke beregnes.")
         else:
@@ -6180,6 +6514,9 @@ f"""#### Stillingsgruppernes rækkevidde i {year}
 
 **Rækkevidde** måler, hvor mange *forskellige* stillingsgrupper en gruppe samarbejder med - uanset hvor meget
 de samarbejder. En bred rækkevidde indikerer et diverst samarbejdsmønster på tværs af karrieretrin.
+
+Rækkevidde tæller kun andre stillingsgrupper - en gruppe der kun samarbejder internt har 
+rækkevidde 0, selvom der er intens samarbejdsaktivitet.
 """)
 
     _grp_partners_reach: dict[str, set] = {}
@@ -6232,6 +6569,180 @@ de samarbejder. En bred rækkevidde indikerer et diverst samarbejdsmønster på 
         }
         )
     
+    st.markdown("---")
+
+    # ── Samarbejdsintensitet på tværs af stillingsgrupper (heatmap) ──────────
+    st.markdown(
+f"""#### Samarbejdsmønstre på tværs af stillingsgrupper i {year}
+
+Heatmappet nedenfor viser, **hvilke stillingsgrupper der publicerer sammen** - og hvor intensivt.
+
+- **Antal forfatterpar** viser den rå trafik mellem to grupper. Det er et volumenmål, og store grupper
+  dominerer naturligt.
+- **Forfatterpar per forfatterbidrag** svarer på spørgsmålet: hvor ofte er en forfatter fra kolonnen 
+med, når nogen fra rækken publicerer? Matricen er ikke symmetrisk, fordi cellen (ph.d.,professor) og
+cellen (professor, ph.d.) svarer på to forskellige spørgsmål - set fra to forskellige perspektiver.
+- **Andel (%) per række** viser for hver stillingsgruppegruppe, hvor dens samarbejder fordeler sig. En række summerer til 100%.
+
+**Bemærk:** Store forfatterskaber (f.eks. artikler med 100+ forfattere) kan skævvride billedet,
+da de bidrager med rigtig mange forfatterpar fra én publikation. 
+""")
+
+    # Byg par-matrix fra kanterne
+    _pair_matrix: dict[tuple[str, str], float] = {}
+    for u, v, w, *_ in (_edges_grp or []):
+        gu = (node_meta or {}).get(u, {}).get("grp", "")
+        gv = (node_meta or {}).get(v, {}).get("grp", "")
+        if not gu or not gv:
+            continue
+        # Par-vægt fordeles ligeligt på de to endepunkter (matcher øvrig logik)
+        _pair_matrix[(gu, gv)] = _pair_matrix.get((gu, gv), 0.0) + w / 2
+        if gu != gv:
+            _pair_matrix[(gv, gu)] = _pair_matrix.get((gv, gu), 0.0) + w / 2
+
+    # Hvis intra-enhed er slået til, flet intra-par ind på diagonalen
+    if _use_grp_all and all_years_data and year in all_years_data:
+        _intra_src = all_years_data[year].get("grp_intra_ew_all", {})
+        for g, v in _intra_src.items():
+            if g in grp_tot_size:
+                # Intra-par skal på diagonalen; undgå dobbelt-tælling hvis edges_keep allerede har dem
+                _pair_matrix[(g, g)] = _pair_matrix.get((g, g), 0.0) + v
+
+    _hm_grps = _grps_hier  # allerede sorteret efter HIERARKI
+    if len(_hm_grps) < 2 or not _pair_matrix:
+        st.info("Ikke tilstrækkeligt data til at vise samarbejdsmatrix for det valgte udsnit.")
+    else:
+        _z_abs = [[round(_pair_matrix.get((gi, gj), 0.0), 1) for gj in _hm_grps] for gi in _hm_grps]
+        _z_ratio = [
+            [round(_pair_matrix.get((gi, gj), 0.0) / (grp_tot_size.get(gi) or 1), 3) for gj in _hm_grps]
+            for gi in _hm_grps
+        ]
+        _z_row_pct = []
+        for gi in _hm_grps:
+            _row_total = sum(_pair_matrix.get((gi, gj), 0.0) for gj in _hm_grps) or 1
+            _z_row_pct.append([
+            round(100 * _pair_matrix.get((gi, gj), 0.0) / _row_total, 2)
+            for gj in _hm_grps
+        ])
+
+        _intra_suffix_hm = ' (inkl. intra-enhed)' if _use_grp_all else ''
+
+        _tab_hm_abs, _tab_hm_ratio, _tab_hm_pct = st.tabs(
+            ["Antal forfatterpar", "Forfatterpar per forfatterbidrag", "Andel (%) per række"]
+        )
+
+        def _heatmap_fig(z, title, colorbar_title, text_fmt, hover_template):
+            _text = [[text_fmt(v) for v in row] for row in z]
+            fig = go.Figure(go.Heatmap(
+                z=z, x=_hm_grps, y=_hm_grps,
+                colorscale=[[0, "#f0f4f8"], [1, "#122947"]],
+                text=_text, texttemplate="%{text}",
+                textfont=dict(size=11),
+                hovertemplate=hover_template,
+                colorbar=dict(title=colorbar_title),
+            ))
+            fig.update_layout(
+                title=title,
+                xaxis=dict(title="", tickangle=-30),
+                yaxis=dict(title="", autorange="reversed"),
+                height=max(400, 55 * len(_hm_grps)),
+                margin=dict(l=180, t=60, r=80, b=120),
+            )
+            return fig
+
+        with _tab_hm_abs:
+            st.plotly_chart(
+                _heatmap_fig(
+                    _z_abs,
+                    f"Antal forfatterpar mellem stillingsgrupper{_intra_suffix_hm}, {year}",
+                    "Antal par",
+                    lambda v: fmt_ui(v) if v else "",
+                    "<b>%{y}</b> og <b>%{x}</b><br>"
+                    "Antal forfatterpar: <b>%{z}</b>"
+                    "<extra></extra>",
+                ),
+                width="stretch",
+                key=f"grp_hm_abs_{year}_{mode}",
+                config={"toImageButtonOptions": {"format": "png", "scale": 3}},
+            )
+            st.caption(
+                "Symmetrisk matrix: par(A,B) = par(B,A). Diagonalen viser intra-gruppe-samarbejde "
+                "(kun vist hvis intra-enhed-toggle er aktiveret)."
+            )
+
+        with _tab_hm_ratio:
+            st.plotly_chart(
+                _heatmap_fig(
+                    _z_ratio,
+                    f"Forfatterpar per forfatterbidrag, stillingsgrupper{_intra_suffix_hm}, {year}",
+                    "Par per bidrag",
+                    lambda v: fmt_ui(v, 2) if v else "",
+                    "Per forfatterbidrag fra <b>%{y}</b><br>"
+                    "dannes i gennemsnit <b>%{z}</b><br> forfatterpar " 
+                    "med <b>%{x}</b><br>"
+                    "<extra></extra>",
+                ),
+                width="stretch",
+                key=f"grp_hm_ratio_{year}_{mode}",
+                config={"toImageButtonOptions": {"format": "png", "scale": 3}},
+            )
+            st.caption(
+                "**Asymmetrisk matrix.** Cellen (række=A, kolonne=B) læses som: *per forfatterbidrag "
+                "fra A, hvor mange par har A med B?* Rækken normaliseres med A's bidrag."
+            )
+
+        with _tab_hm_pct:
+            st.plotly_chart(
+                _heatmap_fig(
+                    _z_row_pct,
+                    f"Fordeling af samarbejdspartnere per stillingsgruppe{_intra_suffix_hm}, {year}",
+                    "Andel (%)",
+                    lambda v: f"{fmt_ui(v, 2)}%" if v else "",
+                    "<b>%{z}%</b> af <b>%{y}</b>ers forfatterpar<br>"
+                    "er med <b>%{x}</b>"
+                    "<extra></extra>",
+                ),
+                width="stretch",
+                key=f"grp_hm_pct_{year}_{mode}",
+                config={"toImageButtonOptions": {"format": "png", "scale": 3}},
+            )
+            st.caption(
+                "Hver række summerer til 100%. Viser hvor en gruppes samarbejdspar *fordeler sig* "
+                "på tværs af andre stillingsgrupper - uafhængigt af gruppens størrelse."
+            )
+
+        # ── Tabel (lang format, så man kan filtrere og downloade) ─────────────
+        _hm_rows = []
+        for gi in _hm_grps:
+            _row_total = sum(_pair_matrix.get((gi, gj), 0.0) for gj in _hm_grps) or 1
+            _bidrag_i = grp_tot_size.get(gi) or 1
+            for gj in _hm_grps:
+                _pairs = _pair_matrix.get((gi, gj), 0.0)
+                if _pairs == 0:
+                    continue
+                _hm_rows.append({
+                    "Fra (række)":                  gi,
+                    "Til (kolonne)":                gj,
+                    "Forfatterpar":                 round(_pairs, 1),
+                    "Par per forfatterbidrag":      round(_pairs / _bidrag_i, 3),
+                    "Andel af rækkens par (%)":    round(100 * _pairs / _row_total, 1),
+                })
+        _hm_schema = [
+            ("Fra (række)",              pa.string()),
+            ("Til (kolonne)",            pa.string()),
+            ("Forfatterpar",             pa.float64()),
+            ("Par per forfatterbidrag",  pa.float64()),
+            ("Andel af rækkens par (%)", pa.float64()),
+        ]
+        with st.expander("Se tabel"):
+            st.dataframe(build_table(_hm_rows, _hm_schema), hide_index=True, width="stretch")
+            st.download_button(
+                "Download (.xlsx)",
+                data=rows_to_excel_bytes(_hm_rows, [n for n, _ in _hm_schema]),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_grp_hm_{year}_{mode}",
+            )
+
     st.markdown("---")
 
     # ── Sammenlign år ─────────────────────────────────────────────────────────
@@ -8525,11 +9036,16 @@ f"""
 
 Publikationspraksis varierer betydeligt på tværs af fakulteterne, bl.a.
 i forhold til omfanget af co-forfatterskaber og udbredelsen af soloartikler. Det påvirker
-både antallet af KU-forfattere per publikation og fordelingen mellem én og flere
-KU-forfattere per publikation. 
+både antallet af KU-forfattere per publikation - og dermed mulige forfatterpar. 
 
 Andelen af publikationer med én KU-forfatter varierer fra **{fmt_ui(min_val,1)}%** ({min_fac}) til
  **{fmt_ui(max_val,1)}%** ({max_fac}), svarende til **{abs_one}** frasorterede publikationer.
+
+*GISNING! På den ene side har vi **soloartikler** - typiske for HUM, JUR og TEO hvor den individuelle 
+forskerstemme står stærkest. På den anden side har vi **mega-forfatterskaber** - konsortium- 
+og samarbejdsartikler med hundredvis eller tusindvis af forfattere, typiske for SUND og 
+SCIENCE. Begge dele er legitime publikationsformer, men de skaber meget forskellige 
+netværksstrukturer - og de skal derfor holdes in mente, når man fortolker graferne i de andre faner.*
 """)
     
     _tab_abs_fa, _tab_pct_fa, _tab_tid_fa = st.tabs(["Antal", "Andel (%)", "Udvikling over tid"])
@@ -8649,7 +9165,7 @@ publikationer, ikke vægtede mål.
                 x=fac_order_pt, y=_vals, name=t,
                 text=[str(v) if v > 0 else "" for v in _vals],
                 textposition="inside",
-                marker_color=_pt_colors[-(i+1)],
+                marker_color=_pt_colors[i],
             ))
         fig2.update_layout(
             barmode="stack",
@@ -9616,9 +10132,9 @@ f"""
 #### Kønshomofili
 
 Fanen undersøger, om forskere på KU publicerer med kolleger af samme køn oftere end 
-den lokale kønsfordelingen ville forudsige - såkalt **kønshomofili**. 
+den lokale kønsfordeling ville forudsige - såkaldt **kønshomofili**. 
 
-Opgørelsen er lavet på **individniveau**: hvert forfatterpar tælles fra begge forfatters perspektiv.
+Opgørelsen er lavet på **individniveau**: hvert forfatterpar tælles fra begge forfatteres perspektiv.
 Det betyder, at et forfatterpar mellem to mandlige professorer på Kemisk Institut tæller som 
 ét *same-gender* par fra hver af de to mænds perspektiv - og disse intra-enhed par er **inkluderet**,
 i modsætning til øvrige netværksanalyse, der kun viser kanter *mellem* enheder. 
@@ -9638,9 +10154,9 @@ forfatterpar-endpoints** i det valgte udsnit - inklusiv par inden for samme enhe
 
 Homofili-indekset sammenligner den observerede same-gender rate med kønsfordelingen i den valgte organisatoriske
 enhed (f.eks. et fakultet eller institut). Men sampublicering foregår primært inden for snævrere grupper - 
-laboratorier, centre og forskningsgrupper - som kan have skæve kønsfordelinger. Et højt indeks kan derfor¨
+laboratorier, centre og forskningsgrupper - som kan have skæve kønsfordelinger. Et højt indeks kan derfor
 afspejle, at mænd og kvinder er koncentrerede i forskellige faglige miljøer, snarere end en præference for
-at publicere med eget køn. Indekset bør derfor tolkes som et mål for *konssegregation i sampubliceringsmønstre* - 
+at publicere med eget køn. Indekset bør derfor tolkes som et mål for *kønssegregation i sampubliceringsmønstre* - 
 ikke nødvendigvis som et udtryk for bevidste valg.
 
 Enheder med færre end fem forfatterpar vises ikke, da indekset er ustabilt ved få observationer.
@@ -9761,6 +10277,9 @@ forskel på de to køns tendens til at publicere inden for samme køn, korrigere
 - **klubfaktor > 1** - mænd klumper sig relativt mere sammen end kvinder -> *mandeklub-tendens*
 - **klubfaktor = 1** - ingen forskel mellem kønnenes homofilimønstre
 - **klubfaktor < 1** - kvinder klumper sig relativt mere end mænd -> *kvindeklub-tendens*
+
+Klubfaktoren beregnes kun hvor begge køn har mindst fem forfatterpar i enheden - samme tærskel 
+som for homofili-indekset.
 """)
         _fig_klub = go.Figure()
         _fig_klub.add_trace(go.Bar(
@@ -10041,7 +10560,7 @@ forskel på de to køns tendens til at publicere inden for samme køn, korrigere
 ### Andel af forfatterbidrag vs. andel af forfatterpar
 Figuren viser forholdet mellem en enheds andel af alle forfatterbidrag (x-aksen) og enhedens
 andel af de samlede forfatterpar (y-aksen). Punkter over diagonalen indikerer enheder,
-der bidrager til relativt flere forfatterpar end deres størrelse tilsiger — dvs. enheder der
+der bidrager til relativt flere forfatterpar end deres størrelse tilsiger - dvs. enheder der
 samarbejder mere end forventet. Punkter under diagonalen indikerer det modsatte.
 """)
     _render_share_comparison(
