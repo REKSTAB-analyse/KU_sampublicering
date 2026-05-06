@@ -2522,9 +2522,14 @@ def main():
     # Sidebar filters
     # -----------------------------------------------------------------------
     
-    for _key in ("cb_fac", "cb_inst", "cb_grp"):
+    # RET!
+    #for _key in ("cb_fac", "cb_inst", "cb_grp"):
+        #if _key not in st.session_state:
+            #st.session_state[_key] = True
+
+    for _key, _default in [("cb_fac", True), ("cb_inst", False), ("cb_grp", False)]:
         if _key not in st.session_state:
-            st.session_state[_key] = True
+            st.session_state[_key] = _default
 
     with st.sidebar:
         st.sidebar.header("Filtre og visning")
@@ -2710,6 +2715,11 @@ Stillingsgrupper opdeler efter karrieretrin."""
             show_fac  = st.checkbox("**Fakulteter**",       key="cb_fac")
             show_inst = st.checkbox("**Institutter**",      key="cb_inst")
             show_grp  = st.checkbox("**Stillingsgrupper**", key="cb_grp")
+
+            if show_grp:
+                st.caption("""Med stillingsgrupper aktiveret bliver netværksvisningen så kompleks,
+                at linjetykkelserne ikke direkte kan aflæses som forfatterpar.
+                """)
 
             _all_insts_by_fac: dict[str, list] = {}
             for yc in data_by_year.values():
@@ -2997,14 +3007,16 @@ Stillingsgrupper opdeler efter karrieretrin."""
                 key="edge_scale_slider",
                 help="Skalerer linjetykkelsen i netværket. Påvirker kun visualiseringen, ikke de underliggende tal."
             )
+            _default_scale = {"I": 400, "F": 600, "G": 400}.get(base_mode(mode), 1200)
+            _scale_key = f"network_scale_default_{base_mode(mode)}"
             network_scale = st.slider(
                 "Netværksstørrelse",
                 min_value=100, max_value=5000,
-                value={"I": 400, "F": 600, "G": 400}.get(base_mode(mode), 1200),
-                step=100,
+                value=st.session_state.get(_scale_key, _default_scale),
                 key="network_scale_slider",
                 help="Justerer størrelsen af hele netværksplottet. Øg værdien, hvis noder overlapper."
             )
+            st.session_state[_scale_key] = network_scale
 
     st.session_state["edge_range"] = (edge_min, edge_max)
 
@@ -3574,23 +3586,22 @@ Stillingsgrupper opdeler efter karrieretrin."""
         _node_info = {}
         for nid in nodes_keep:
             m = node_meta.get(nid, {})
-            neighbours_data = []
+            neighbours_acc = {}
             for u, v, w, *_ in edges_keep:
                 if u == nid or v == nid:
                     partner = v if u == nid else u
                     pm = node_meta.get(partner, {})
-                    et = "Intra" if m.get("fac") == pm.get("fac") else "Inter"
+                    et = "Intra" if node_meta.get(nid, {}).get("fac") == pm.get("fac") else "Inter"
                     partner_label = (node_display.get(partner, {}).get("label", "").replace("\n", " ")
                                      if node_display else "")
                     if not partner_label:
                         parts = [p for p in (pm.get("fac",""), pm.get("inst",""), pm.get("grp","")) if p]
                         partner_label = " | ".join(parts) if parts else partner
-                    neighbours_data.append({
-                        "label": partner_label,
-                        "pubs":  int(w),
-                        "type":  et,
-                    })
-            neighbours_data.sort(key=lambda x: -x["pubs"])
+                    if partner_label in neighbours_acc:
+                        neighbours_acc[partner_label]["pubs"] += int(w)
+                    else:
+                        neighbours_acc[partner_label] = {"label": partner_label, "pubs": int(w), "type": et}
+            neighbours_data = sorted(neighbours_acc.values(), key=lambda x: -x["pubs"])
             node_label = (node_display.get(nid, {}).get("label", "").replace("\n", " ")
                           if node_display else "")
             if not node_label:
@@ -3638,6 +3649,11 @@ kunne resultere i seks forfatterpar.
                 st.caption("Illustration af et eksempel, hvor en publikation med fire forfattere (A, B, C, D) genererer seks forfatterpar.")
 
         st.markdown(f"""
+**Hvad kan det her værktøj?**
+
+Appen kortlægger sampubliceringsmønstre blandt KU's VIP-forforfattere - hvem der publicerer, hvor intensivt, 
+og hvordan det udvikler sig over tid. Netværkvisningen herunder er udgangspunktet for analyserne;
+de øvrige faner går i dybden med fakulteter, institutter, stillingsgrupper, køn og nationaliteter. 
 
 **Hvordan læses netværket?**
 
@@ -3654,6 +3670,17 @@ Netværket viser **relationer**, ikke årsager: tætte forbindelser kan afspejle
 eller strukturelle forhold.
 
 **Tip:** Klik på en cirkel for at se dens detaljer og nærmeste samarbejdspartnere i panelet i højre hjørne.
+
+**Hvordan tilpasser jeg netværket?**
+
+Brug **sidepanelet til venstre** til at jusetere, hvad netværket viser:
+
+- **Organisation** bestemmer detaljeniveauet - fakulteter giver overblik, institutter og stillingsgrupper går i dybden.
+Filtrene afgrænser analyserne til specifikke enheder. 
+- **Diversitet** tilføjer køns- og nationalitetsdimensioner. 
+- **Netværksvisning** justerer størrelsesfiltre og den visuelle fremstilling. 
+
+De øvrige faner **nedenunder netværket** uddyber analyserne med figurer og tabeller for hvert organisatoriske niveau.
 """)
 
     st.components.v1.html(html, height=800, scrolling=True)
@@ -3996,178 +4023,6 @@ forskningsområdet. Data hentes i første omgang fra OpenAlex - og suppleres sen
 """, unsafe_allow_html=True)
 
 
-
-
-def _render_share_comparison(org_tot: dict, org_ew: dict, org_label: str, title: str, header: str = True, key: str = "", show_table: bool = True, org_ew_all: dict = None, year: int = None, show_intra=True, filter_caption=None):
-    """Scatter + diverging bar: share of forfatterbidrag vs share of edge weight.
-
-    org_tot : {unit: forfatterbidrag_sum}
-    org_ew  : {unit: edge_weight_sum}   (already split 50/50 per endpoint)
-    """
-    if header:
-        st.markdown(
-"""
-### Andel af forfatterbidrag vs. andel af forfatterpar
-Figuren viser forholdet mellem en enheds andel af alle forfatterbidrag (x-aksen) og enhedens
-andel af de samlede forfatterpar (y-aksen). Punkter over diagonalen indikerer enheder,
-der bidrager til relativt flere forfatterpar end deres størrelse tilsiger - dvs. enheder der
-samarbejder mere end forventet. Punkter under diagonalen indikerer det modsatte.
-"""
-)
-
-    units = sorted(set(org_tot) | set(org_ew))
-    if not units:
-        return
-
-    if org_ew_all is not None:
-        _use_all = st.toggle(
-            "Inkludér intra-enhed forfatterpar (f.eks. to professorer på samme institut)",
-            value=False,
-            key=f"share_all_pairs_{org_label}_{key}",
-            help="Til: alle forfatterpar inkl. par inden for samme enhed. Fra: kun netværkskanter (par mellem noder).",
-            disabled=not show_intra
-        )
-        if _use_all:
-            st.caption("Alle forfatterpar inkl. par inden for samme enhed (f.eks. to mandlige professorer på Kemisk Institut).")
-        else:
-            st.caption("Kun forfatterpar *mellem* de valgte organisatoriske enheder - som vist i netværket.")
-
-        _active_ew = org_ew_all if _use_all else org_ew
-    else:
-        _active_ew = org_ew
-
-    grand_tot = sum(org_tot.values()) or 1
-    grand_ew  = sum(_active_ew.values())  or 1
-
-    rows = []
-    for u in units:
-        pct_tot = 100 * org_tot.get(u, 0) / grand_tot
-        pct_ew  = 100 * _active_ew.get(u, 0)  / grand_ew
-        rows.append({
-            "unit":    u,
-            "pct_tot": round(pct_tot, 1),
-            "pct_ew":  round(pct_ew, 1),
-            "diff":    round(pct_ew,1) - round(pct_tot, 1),
-        })
-
-    # ── Scatter: forfatterbidrag% (x) vs forfatterpar% (y) ───────────────────────────
-    #st.subheader(f"{org_label}: andel af forfatterbidrag vs andel af sampubliceringer")
-
-    _fig_sc = go.Figure()
-    # Diagonal reference line
-    _max_axis = max(max(r["pct_tot"] for r in rows), max(r["pct_ew"] for r in rows)) * 1.1
-    _fig_sc.add_trace(go.Scatter(
-        x=[0, _max_axis], y=[0, _max_axis],
-        mode="lines",
-        line=dict(color="#aaaaaa", dash="dash", width=1),
-        showlegend=False,
-        hoverinfo="skip",
-    ))
-    _fig_sc.add_trace(go.Scatter(
-        x=[r["pct_tot"] for r in rows],
-        y=[r["pct_ew"]  for r in rows],
-        mode="markers+text",
-        text=[r["unit"] for r in rows],
-        textposition="top center",
-        marker=dict(
-            size=12,
-            color="#122947",
-            cmin=-max(abs(r["diff"]) for r in rows),
-            cmax= max(abs(r["diff"]) for r in rows),
-        ),
-        hovertemplate=(
-            "<b>%{text}</b><br>"
-            "Forfatterantal: %{x:.1f}%<br>"
-            "Forfatterpar: %{y:.1f}%<br>"
-            "<extra></extra>"
-        ),
-    ))
-    _year_str = f", {year}" if year else ""
-    _title_suffix = " (inkl. intra-enhed)" if (org_ew_all is not None and _use_all) else ""
-    _full_title = f"{title}{_title_suffix}{_year_str}" if title else None
-    _div_title  = f"Forskel i andel - forfattere vs. forfatterpar{_title_suffix}{_year_str}" if title else None
-    _fig_sc.update_layout(
-        xaxis_title=f"Andel af forfattere (%)",
-        yaxis_title=f"Andel af sampubliceringer (%)",
-        height=420,
-        margin=dict(t=50 if _full_title else 30),
-        showlegend=False,
-        title=dict(text=_full_title) if _full_title else None,
-    )
-    st.plotly_chart(_fig_sc, width='stretch', key=f"fig_sc_{org_label}_{key}",
-        config={
-            "toImageButtonOptions": {
-                "format": "png",
-                "scale": 3,
-            }
-        }
-    )
-
-    # ── Diverging bar: difference (forfatterpar% − bidrag%) ──────────────────────────
-    rows_sorted = sorted(rows, key=lambda r: r["diff"])
-    _colors = ["#bac7d9" if r["diff"] >= 0 else "#122947" for r in rows_sorted]
-    _fig_div = go.Figure(go.Bar(
-        y=[r["unit"] for r in rows_sorted],
-        x=[r["diff"] for r in rows_sorted],
-        orientation="h",
-        marker_color=_colors,
-        text=[f"{r['diff']:+.1f}pp" for r in rows_sorted],
-        textposition="inside",
-        hovertemplate="<b>%{y}</b><br>Forskel: %{x:+.1f} pp<extra></extra>",
-    ))
-    _fig_div.add_vline(x=0, line_width=1, line_color="#666666")
-    _div_title = f"Forskel i andel - forfattere vs. forfatterpar{_title_suffix}" if title else None
-    _fig_div.update_layout(
-        xaxis_title="Samlet forfatterpar-andel minus bidrag-andel (procentpoint)",
-        yaxis=dict(autorange="reversed"),
-        height=max(300, 35 * len(rows_sorted)),
-        margin=dict(l=140, r=80, t=50 if _div_title else 10),
-        title=dict(text=_div_title) if _div_title else None,
-    )
-    st.plotly_chart(_fig_div, width='stretch', key=f"fig_div_{org_label}_{key}",
-        config={
-            "toImageButtonOptions": {
-                "format": "png",
-                "scale": 3,
-            }
-        }
-    )
-    if filter_caption:
-            st.caption(filter_caption)
-
-
-    # Table
-    _tbl_rows = [
-        {org_label: r["unit"],
-         "Bidrag-andel (%)": r["pct_tot"],
-         "Samlet forfatterpar-andel (%)":   r["pct_ew"],
-         "Forskel (pp)":     r["diff"]}
-        for r in sorted(rows, key=lambda r: -abs(r["diff"]))
-    ]
-    _tbl_schema = [
-        (org_label,           pa.string()),
-        ("Bidrag-andel (%)",  pa.float64()),
-        ("Samlet forfatterpar-andel (%)",    pa.float64()),
-        ("Forskel (pp)",      pa.float64()),
-    ]
-
-    if show_table:
-        _tbl_col = f"Forfatterpar-andel (%){_title_suffix}"
-        _tbl_rows_final = [{**r, _tbl_col: r.pop("Samlet forfatterpar-andel (%)")} for r in _tbl_rows]
-        _tbl_schema_final = [
-            (org_label,          pa.string()),
-            ("Bidrag-andel (%)", pa.float64()),
-            (_tbl_col,           pa.float64()),
-            ("Forskel (pp)",     pa.float64()),
-        ]
-        with st.expander("Se tabel"):
-            st.dataframe(build_table(_tbl_rows_final, _tbl_schema_final), hide_index=True, width="stretch")
-            st.download_button(
-                "Download (.xlsx)",
-                data=rows_to_excel_bytes(_tbl_rows_final, [n for n, _ in _tbl_schema_final]),
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"dl_share_comparison_{org_label}_{key}"
-            )
 
 def _render_year_comparison(all_years_data: dict, series: list, title: str,
                              yaxis_label: str = "Forfatterantal",
@@ -4592,13 +4447,6 @@ via togglen nedenfor for at vise den fulde sampubliceringsaktivitet.
     _inst_tot_plot      = (_intra_inst_plot + _inter_inst_plot) or 1
     _pct_intra_inst_plot = round(100 * _intra_inst_plot / _inst_tot_plot, 1)
 
-    st.markdown(
-f"""**{intra_label.capitalize()}-forfatterpar** udgør **{int(_intra_pubs_plot)}** (**{_pct_intra_plot}%**),
-**{inter_label.capitalize()} forfatterpar** udgør **{int(_inter_pubs_plot)}** (**{_pct_inter_plot}%**)."""
-+ (f" På **institutniveau** er intra-andelen **{_pct_intra_inst_plot}%**."
-   if base_mode(mode) in ("FI", "FIG") else "")
-+ (f" På **stillingsgruppenivu** er intra-andelen **{_pct_intra_grp_plot}%**."
-   if base_mode(mode) in {m.replace("S","") for m in _grp_modes} | _grp_modes else ""))
 
     _filter_key = f"{int(_intra_pubs_plot)}_{int(_inter_pubs_plot)}"
 
@@ -4624,6 +4472,7 @@ f"""**{intra_label.capitalize()}-forfatterpar** udgør **{int(_intra_pubs_plot)}
             hoverinfo="label+value+percent",
         ))
         _fig_donut.update_layout(
+            title="Fakulteter",
             height=360, margin=dict(t=60, b=60, l=60, r=60),
             showlegend=True,
             legend=dict(orientation="v", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
@@ -4643,6 +4492,7 @@ f"""**{intra_label.capitalize()}-forfatterpar** udgør **{int(_intra_pubs_plot)}
                 hoverinfo="label+value+percent",
             ))
             _fig_donut2.update_layout(
+                title="Institutter",
                 height=360, margin=dict(t=60, b=60, l=60, r=60),
                 showlegend=True,
                 legend=dict(orientation="v", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
@@ -4660,6 +4510,7 @@ f"""**{intra_label.capitalize()}-forfatterpar** udgør **{int(_intra_pubs_plot)}
                 hoverinfo="label+value+percent",
             ))
             _fig_donut_grp.update_layout(
+                title="Stillingsgrupper",
                 height=360, margin=dict(t=60, b=60, l=60, r=60),
                 showlegend=True,
                 legend=dict(orientation="v", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
@@ -4791,7 +4642,7 @@ samlede samarbejdsomfang er lavere.
         st.markdown(
 """
 Afsnittet nedenfor fremhæver de mest intensive samarbejdsrelationer,
-opgjort som det samlede antal forfatterpar på tværs af år.
+opgjort som det samlede antal forfatterpar på tværs af år. Vær opmærksom på, hvilke filtre der er valgte i sidepanelet. 
 """)
 
         top_n_pairs = st.number_input(
@@ -4821,10 +4672,10 @@ opgjort som det samlede antal forfatterpar på tværs af år.
             legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="left", x=0),
             margin=dict(t=50, b=120),
         )
-        if filter_caption:
-            st.caption(filter_caption)
         st.plotly_chart(_fig_pairs, width='stretch',
             config={"toImageButtonOptions": {"format": "png", "scale": 3}})
+        if filter_caption:
+            st.caption(filter_caption)   
 
         _pair_tbl_rows = [
             {"Par": pair,
@@ -5070,8 +4921,6 @@ ved **{_avg_top}** ({fmt_ui(_avg_top_val)}) og lavest ved **{_avg_bot}** ({fmt_u
             yaxis=dict(autorange="reversed"),
             title = f"Fakulteternes forfattere, {year}"
         )
-        if filter_caption:
-            st.caption(filter_caption)
         st.plotly_chart(_fig_ft, width="stretch", key=f"fac_tot_{year}_{mode}",
         config={
             "toImageButtonOptions": {
@@ -5080,6 +4929,8 @@ ved **{_avg_top}** ({fmt_ui(_avg_top_val)}) og lavest ved **{_avg_bot}** ({fmt_u
             }
         }
         )
+        if filter_caption:
+            st.caption(filter_caption)
 
     with _tab_fp:
         _pct_vals = [round(100 * v / _grand_tot, 1) for v in _tots_ord]
@@ -5096,8 +4947,6 @@ ved **{_avg_top}** ({fmt_ui(_avg_top_val)}) og lavest ved **{_avg_bot}** ({fmt_u
             yaxis=dict(autorange="reversed"),
             title = f"Fakulteternes andel af samlet forfatterantal, {year}"
         )
-        if filter_caption:
-            st.caption(filter_caption)
         st.plotly_chart(_fig_fp, width="stretch", key=f"fac_pct_{year}_{mode}",
         config={
             "toImageButtonOptions": {
@@ -5106,6 +4955,8 @@ ved **{_avg_top}** ({fmt_ui(_avg_top_val)}) og lavest ved **{_avg_bot}** ({fmt_u
             }
         }
         )
+        if filter_caption:
+            st.caption(filter_caption)
 
     with _tab_fa:
         _fig_fa = go.Figure(go.Bar(
@@ -5121,8 +4972,6 @@ ved **{_avg_top}** ({fmt_ui(_avg_top_val)}) og lavest ved **{_avg_bot}** ({fmt_u
             yaxis=dict(autorange="reversed"),
             title = f"Fakulteternes gennemsnitlige forfatterantal, {year}"
         )
-        if filter_caption:
-            st.caption(filter_caption)
         st.plotly_chart(_fig_fa, width="stretch", key=f"fac_avg_{year}_{mode}",
         config={
             "toImageButtonOptions": {
@@ -5131,6 +4980,8 @@ ved **{_avg_top}** ({fmt_ui(_avg_top_val)}) og lavest ved **{_avg_bot}** ({fmt_u
             }
         }
         )
+        if filter_caption:
+            st.caption(filter_caption)
     
     # ── Tabel ─────────────────────────────────────────────────────────────────
     _fac_summary_rows = [
@@ -5258,6 +5109,7 @@ det samlede samarbejdsomfang er lavere.
                 yaxis=dict(autorange="reversed"),
                 title=f"Forfatterpar per fakultet{' (inkl. intra-enhed)' if _use_fac_all else ''} - andel (%), {year}",
             )
+            st.caption("Vær opmærksom på, at procenter kan overstige 100%. Se **Læsning af procenter** i Oversigt-fanen.")
             if filter_caption:
                 st.caption(filter_caption)
             st.plotly_chart(_fig_ew_p, width="stretch", key=f"fac_ew_pct_{year}_{mode}",
@@ -5543,6 +5395,7 @@ samarbejdsmønstrene.
             f for s in (all_years_data or {}).values()
             for f in s.get(_fac_ew_key, {})
         })
+
         _render_year_comparison(
             all_years_data,
             series=[(fac, _fac_ew_key, fac) for fac in _facs_ew_plot],
@@ -5552,23 +5405,13 @@ samarbejdsmønstrene.
             key_suffix=f"fac_ew_{year}_{mode}",
             show_table=True,
         )
-    
-    st.markdown("---")
-
+  
     if fac_ew and _grand_ew:
         _fac_ew_all = None
         if all_years_data and year in all_years_data:
             _fi = all_years_data[year].get("fac_intra_ew_all", {})
             _fx = all_years_data[year].get("fac_inter_ew_all", {})
             _fac_ew_all = {f: _fi.get(f, 0.0) + _fx.get(f, 0.0) for f in set(_fi) | set(_fx)}
-        _render_share_comparison(
-            fac_tot_size, fac_ew, "Fakultet",
-            title=f"Fakulteternes andel af forfatterantal vs. sampubliceringer, {year}",
-            key=f"fac_{year}_{mode}",
-            org_ew_all=_fac_ew_all,
-            year=year, show_intra=True,
-            filter_caption=filter_caption
-        )
 
 def render_tab_institutter(year, mode, inst_tot_size, inst_avg_size, institut_fakultets_map, edges_keep, node_meta, all_years_data=None, inst_ew=None, faculty_base_colors=None, size_map=None, total_pubs=None, filter_caption=None, show_intra=True):
     if not inst_tot_size or not inst_avg_size:
@@ -5903,6 +5746,7 @@ det samlede samarbejdsomfang er lavere.
                 margin=dict(l=160, t=50, r=80),
                 yaxis=dict(autorange="reversed"),
             )
+            st.caption("Vær opmærksom på, at procenter kan overstige 100%. Se **Læsning af procenter** i Oversigt-fanen.")
             st.plotly_chart(_fig_ew_p, width="stretch", key=f"inst_ew_pct_{year}_{mode}",
                 config={"toImageButtonOptions": {"format": "png", "scale": 3}})
             if filter_caption:
@@ -6482,30 +6326,6 @@ strategiske eller faglige forskydninger.
         + [f"{i} (rækkevidde fak)"  for i in _insts_fac_reach_in_data]
     )
 
-    st.markdown("---")
-
-    # ── Andel forfattere vs. sampubliceringer ────────────────────────────
-    if _inst_ew_filt:
-        _inst_ew_all_for_share = {}
-        if all_years_data and year in all_years_data:
-            _ii = all_years_data[year].get("inst_intra_ew_all", {})
-            _ix = all_years_data[year].get("inst_inter_ew_all", {})
-            _inst_ew_all_for_share = {
-                i: _ii.get(i, 0.0) + _ix.get(i, 0.0)
-                for i in set(_ii) | set(_ix)
-                if _fac_ok(i)
-            }
-        _render_share_comparison(
-            _inst_tot_filt,
-            _inst_ew_filt,
-            "Institut",
-            title=f"Institutternes andel af forfattere vs. sampubliceringer, {year}",
-            key=f"inst_{year}_{mode}",
-            org_ew_all=_inst_ew_all_for_share if _inst_ew_all_for_share else None,
-            year=year, show_intra=True,
-            filter_caption=filter_caption
-        )
-
 
 
 
@@ -7025,6 +6845,7 @@ karrieretrin.
                 margin=dict(l=160, t=50, r=80),
                 yaxis=dict(autorange="reversed"),
             )
+            st.caption("Vær opmærksom på, at procenter kan overstige 100%. Se **Læsning af procenter** i Oversigt-fanen.")
             st.plotly_chart(_fig_ew, width="stretch", key=f"grp_ew_abs_{year}_{mode}",
                 config={"toImageButtonOptions": {"format": "png", "scale": 3}})
             if filter_caption:
@@ -7431,20 +7252,6 @@ forskere på forskellige niveauer indgår i sampublicering over tid.
             show_table=True,
         )
 
-    st.markdown("---")
-
-    if grp_ew:
-        _grp_ew_all = None
-        if all_years_data and year in all_years_data:
-            _gi = all_years_data[year].get("grp_intra_ew_all", {})
-            _gx = all_years_data[year].get("grp_inter_ew_all", {})
-            _grp_ew_all = {g: _gi.get(g, 0.0) + _gx.get(g, 0.0) for g in set(_gi) | set(_gx)}
-        _render_share_comparison(grp_tot_size, grp_ew, "Stillingsgruppe",
-            title=f"Stillingsgruppernes andel af forfattere vs. andel af sampubliceringer",
-            key=f"grp_{year}_{mode}",
-            org_ew_all=_grp_ew_all,
-            year=year, show_intra=True,
-            filter_caption=filter_caption)
 
     st.markdown("---")
 
@@ -7643,25 +7450,28 @@ def render_tab_centralitet(year, mode, faculty_wd_sorted, faculty_bs_sorted,
     
     st.markdown(
 f""" 
-Denne fane viser, hvilke enheder der spiller den største rolle i sampubliceringsnetværket - både
-hvem der samarbejder mest, og hvem der binder forskellige enheder sammen. Centralitetsanalysen identificerer enheder, 
-der spiller en særlig rolle i sampubliceringsnetværket - enten ved at samarbejde meget eller ved at fungere som forbindelsesled mellem 
-ellers adskilte miljøer. Analysen beskriver netværkets **struktur**, ikke enkeltpersoners kvalitet eller strategiske valg. 
+Fanen viser, hvilke enheder der spiller den første rolle i sampubliceringsnetværket - både hvem der samarbejder mest, og hvem 
+der binder netværket sammen. Analysen beskriver **struktur**, ikke kvalitet eller strategiske valg. 
 
-**Samlet samarbejdsomfang** (centralitet) opgør, hvor mange **forfatterpar** en organisatorisk enhed samlet set 
-indgår i. Det er et mål for aktivitet - ikke nødvendigvis strategisk position. 
+**Samlet samarbejdsomfang** (centralitet) tæller, hvor mange forfatterpar en enhed indgår i. Det er et mål for aktivitet - et stort institut med 
+mange forfattere vil naturligt score højt, uanset om samarbejdet er bredt eller koncentreret. 
 
-**Brobyggerrolle** (*betweenness* centralitet) viser, hvilke enheder der fungerer som forbindelsesled mellem grupper, der 
-ellers ikke samarbejder direkte. En enhed med en høj brobyggerrolle er strukturel vigtig i det viste netværk, da
-den binder netværket sammen og skaber forbindelser på tværs af grupper, der ellers ville være
-adskilte.
+**Brobyggerrolle** (*betweenness* centralitet) måler noget andet: hvor ofte en enhed befinder sig på den korteste vel mellem to
+andre enheder, som ellers ikke samarbejder, i netværket. En enhed med høj brobyggerrolle er strukturel vigtig - ikke fordi den samarbejde mest, men fordi mange forbindelser 
+*løber igennem* den. 
 
-**Eksempel**: en enhed kan have relativt få samarbejder, men fungere som det eneste forbindelsesled
-mellem to ellers adskilte grupper. Hvis denne enhed fjernes, opdeles netværket i separate dele. 
-Enheden har derfor en vigtig brobyggerrolle, selvom dens samlede samarbejdsomfang er begrænset. 
+**Eksempel:** antag, at SUND og HUM sjældent samarbejder direkte, men begge samarbejder med et bestemt institut på SCIENCE. 
+Det SCIENCE-institut har da en høj brobyggerrolle, fordi det er forbindelsesleddet. Fjernes det, mister SUND og HUM forbindelseslinjen
+til hinanden. Et institut kan altså have relativt få forfatterpar og stadig være strukturelt uundværligt. 
 
-Centralitetsmålene afspejler netværkets struktur i det valgte udsnit og år. En høj centralitet kan skyldes organisatorisk
-placering eller struktur. Lav centralitet betyder ikke, at en enhed er isoleret i praksis; den kan samarbejde med få, faste eller eksterne partnere. 
+Som tommelfingerregel for brobyggerrollen (normaliseret):
+
+- **> 0.3** - stærk strukturel position; enheden er svær at erstatte
+- **0.1-0.3** - moderat brobyggerrolle
+- **< 0.1** - begrænset strukturel betydninge i det viste netværk
+
+Bemærk, at begge mål afspejler det valgte udsnit og år. Lav centralitet betyder ikke, at enheden i isoleret i praksis - den kan samarbejde
+intensivt med få, faste partnere eller primært eksternt.
 """)
 
     if svg_centralitet:
@@ -10246,6 +10056,8 @@ Resultaterne bør derfor tolkes som **strukturelle mønstre**, ikke individuelle
         )
         st.plotly_chart(fig1, width='stretch',
             config={"toImageButtonOptions": {"format": "png", "scale": 3}})
+        if filter_caption:
+            st.caption(filter_caption)
 
     with _tab_pct:
         fig1p = go.Figure()
@@ -10282,6 +10094,8 @@ Resultaterne bør derfor tolkes som **strukturelle mønstre**, ikke individuelle
         )
         st.plotly_chart(fig1p, width='stretch',
             config={"toImageButtonOptions": {"format": "png", "scale": 3}})
+        if filter_caption:
+            st.caption(filter_caption)
 
     rows = []
     for g in groups_sorted:
@@ -10682,7 +10496,7 @@ per par, så tallene kan summeres på tværs af enheder.
     tab_abs, tab_pct = st.tabs(["Antal", "Andel (%)"])
     with tab_abs:
         st.plotly_chart(_make_sx_fig(_active_sx_ew, _active_sx_plot, False, "abs"),
-            use_container_width=True, key=f"sx_abs_{year}_{mode}",
+            width='content', key=f"sx_abs_{year}_{mode}",
             config={"toImageButtonOptions": {"format": "png", "scale": 3}})
         if filter_caption:
             st.caption(filter_caption)
@@ -10706,7 +10520,7 @@ per par, så tallene kan summeres på tværs af enheder.
 
     with tab_pct:
         st.plotly_chart(_make_sx_fig(_active_sx_ew, _active_sx_plot, True, "pct"),
-            use_container_width=True, key=f"sx_pct_{year}_{mode}",
+            width='content', key=f"sx_pct_{year}_{mode}",
             config={"toImageButtonOptions": {"format": "png", "scale": 3}})
         if filter_caption:
             st.caption(filter_caption)
@@ -11103,7 +10917,7 @@ kvinder end forventet.
             title=f"Kønshomofili per {group_label.lower()}, {year}",
             **_layout_hom,
         )
-        st.plotly_chart(_fig_hom, use_container_width=True,
+        st.plotly_chart(_fig_hom, width='content',
             config={"toImageButtonOptions": {"format": "png", "scale": 3}})
         if filter_caption:
             st.caption(filter_caption)
@@ -11149,7 +10963,7 @@ som for homofili-indekset.
             title=f"Klubfaktor per {group_label.lower()}, {year}",
             **_bar_layout(_orgs_hom, grouped=False),
         )
-        st.plotly_chart(_fig_klub, use_container_width=True,
+        st.plotly_chart(_fig_klub, width='content',
             config={"toImageButtonOptions": {"format": "png", "scale": 3}})
         if filter_caption:
             st.caption(filter_caption)
@@ -11240,7 +11054,7 @@ som for homofili-indekset.
                 height=320, margin=dict(t=50),
                 title=f"Forfatterpar per kønskombination{' (inkl. intra-enhed)' if _use_combo_all_tid else ''} over tid, {years_sorted[0]}–{years_sorted[-1]}"
             )
-            st.plotly_chart(fig_combo_tid, use_container_width=True, key=f"combo_tid_{year}_{mode}",
+            st.plotly_chart(fig_combo_tid, width='content', key=f"combo_tid_{year}_{mode}",
                 config={"toImageButtonOptions": {"format": "png", "scale": 3}})
             if filter_caption:
                 st.caption(filter_caption)
@@ -11294,7 +11108,7 @@ som for homofili-indekset.
                 height=360, margin=dict(t=50),
                 title=f"Homofili og klubfaktor over tid, {years_sorted[0]}–{years_sorted[-1]}"
             )
-            st.plotly_chart(fig_hom_tid, use_container_width=True,
+            st.plotly_chart(fig_hom_tid, width='content',
                 config={"toImageButtonOptions": {"format": "png", "scale": 3}})
             if filter_caption:
                 st.caption(filter_caption)
@@ -11316,111 +11130,6 @@ som for homofili-indekset.
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"dl_hom_tid_{year}_{mode}")
 
-    st.markdown("---")
-
-    # ── Andel forfatterantal vs. sampubliceringer ────────────────────────────
-    def _org_from_node_id(nid: str) -> str:
-        parts = nid.split("|")
-        keys = []
-        if "Fakulteter"       in _selected_levels: keys.append(parts[0] if len(parts) > 0 else "")
-        if "Institutter"      in _selected_levels: keys.append(parts[1] if len(parts) > 1 else "")
-        if "Stillingsgrupper" in _selected_levels: keys.append(parts[2] if len(parts) > 2 else "")
-        return " - ".join(k for k in keys if k)
-
-    def _node_id_ok(nid: str) -> bool:
-        parts = nid.split("|")
-        if len(parts) < 3:
-            return True
-        if _køn_fac_filter  and parts[0] not in _køn_fac_filter:  return False
-        if _køn_inst_filter and parts[1] not in _køn_inst_filter: return False
-        if _køn_grp_filter  and parts[2] not in _køn_grp_filter:  return False
-        return True
-
-    org_sex_ew2: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    for edge in _edges_f:
-        u, v, w = edge[0], edge[1], edge[2]
-        combo = edge[3] if len(edge) > 3 and edge[3] else None
-        if not combo or "-" not in combo:
-            continue
-        sex_u, sex_v = combo.split("-", 1)
-        org_u = _org_from_node_id(u)
-        org_v = _org_from_node_id(v)
-        for endpoint_nid, endpoint_org, endpoint_sex in [(u, org_u, sex_u), (v, org_v, sex_v)]:
-            if _node_id_ok(endpoint_nid) and endpoint_org in sex_size:
-                org_sex_ew2[endpoint_org][endpoint_sex] += w
-
-    # Alle forfatterpar inkl. intra-node per org (fra sex_pairs)
-    org_sex_ew_all: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    for raw_key, counts in (sex_pairs or {}).items():
-        parts = raw_key.split("|")
-        if len(parts) != 4: continue
-        fac, inst, grp, focal_sex = parts
-        if selected_facs  and fac  not in selected_facs:  continue
-        if selected_insts and inst not in selected_insts: continue
-        if selected_grps  and grp  not in selected_grps:  continue
-        if _køn_fac_filter  and fac  not in _køn_fac_filter:  continue
-        if _køn_inst_filter and inst not in _køn_inst_filter: continue
-        if _køn_grp_filter  and grp  not in _køn_grp_filter:  continue
-        org = _org_key({"fac": fac, "inst": inst, "grp": grp})
-        total = counts.get("same", 0) + counts.get("cross", 0)
-        if org in sex_size:
-            org_sex_ew_all[org][focal_sex] = org_sex_ew_all[org].get(focal_sex, 0.0) + total
-
-    sex_tot_all: dict[str, int] = {}
-    for nid, m in _node_meta_f.items():
-        if m.get("type") not in ("fac_sex", "inst_sex", "grp", "grp_sex"):
-            continue
-        sex  = m.get("sex", "ukendt")
-        size = m.get("size", 0)
-        sex_tot_all[sex] = sex_tot_all.get(sex, 0) + size
-
-    # Netværkskanter
-    sex_ew_net: dict[str, float] = {}
-    for edge in _edges_f:
-        u, v, w = edge[0], edge[1], edge[2]
-        combo = edge[3] if len(edge) > 3 and edge[3] else None
-        if not combo or "-" not in combo:
-            continue
-        sex_u, sex_v = combo.split("-", 1)
-        sex_ew_net[sex_u] = sex_ew_net.get(sex_u, 0.0) + w
-        sex_ew_net[sex_v] = sex_ew_net.get(sex_v, 0.0) + w
-
-    # Alle forfatterpar inkl. intra-node (fra sex_pairs)
-    sex_ew_all: dict[str, float] = {}
-    for raw_key, counts in (sex_pairs or {}).items():
-        parts = raw_key.split("|")
-        if len(parts) != 4:
-            continue
-        fac, inst, grp, focal_sex = parts
-        if selected_facs  and fac  not in selected_facs:  continue
-        if selected_insts and inst not in selected_insts: continue
-        if selected_grps  and grp  not in selected_grps:  continue
-        if _køn_fac_filter  and fac  not in _køn_fac_filter:  continue
-        if _køn_inst_filter and inst not in _køn_inst_filter: continue
-        if _køn_grp_filter  and grp  not in _køn_grp_filter:  continue
-        total = counts.get("same", 0) + counts.get("cross", 0)
-        sex_ew_all[focal_sex] = sex_ew_all.get(focal_sex, 0.0) + total
-
-    st.markdown(
-"""
-### Andel af forfattere vs. andel af forfatterpar
-Figuren viser forholdet mellem en enheds andel af alle forfattere (x-aksen) og enhedens
-andel af de samlede forfatterpar (y-aksen). Punkter over diagonalen indikerer enheder,
-der bidrager til relativt flere forfatterpar end deres størrelse tilsiger - dvs. enheder der
-samarbejder mere end forventet. Punkter under diagonalen indikerer det modsatte.
-""")
-    _render_share_comparison(
-        {sex_display.get(k, k): v for k, v in sex_tot_all.items()},
-        {sex_display.get(k, k): v for k, v in sex_ew_net.items()},
-        "Køn",
-        header=None,
-        title=f"Andel af forfattere vs. sampubliceringer fordelt på køn, {year}",
-        key=f"samlet_{year}_{mode}",
-        show_table=True,
-        org_ew_all={sex_display.get(k, k): v for k, v in sex_ew_all.items()},
-        year=year, show_intra=True,
-        filter_caption=filter_caption
-    )
 
 
 
@@ -12078,7 +11787,7 @@ forfatterpar inkl. intra-enhed skal indgå.
             legend_title="Statsborgerskab",
             title=f"Forfatterpar fordelt på nationalitet{' (inkl. intra-enhed)' if _use_all_ew else ''}, {year}",
             **_nat_bar_layout(_groups_active_plot))
-        st.plotly_chart(fig_ew, use_container_width=True, key=f"nat_ew_abs_{year}_{mode}",
+        st.plotly_chart(fig_ew, width='content', key=f"nat_ew_abs_{year}_{mode}",
             config={"toImageButtonOptions": {"format": "png", "scale": 3}})
         if filter_caption:
             st.caption(filter_caption)
@@ -12116,7 +11825,7 @@ forfatterpar inkl. intra-enhed skal indgå.
             xaxis_title="Andel (%)", xaxis_range=[0,100], legend_title="Statsborgerskab",
             title=f"Forfatterpar fordelt på nationalitet{' (inkl. intra-enhed)' if _use_all_ew else ''} - andel (%), {year}",
             **_nat_bar_layout(_groups_active_plot))
-        st.plotly_chart(fig_ewp, use_container_width=True, key=f"nat_ew_pct_{year}_{mode}",
+        st.plotly_chart(fig_ewp, width='content', key=f"nat_ew_pct_{year}_{mode}",
             config={"toImageButtonOptions": {"format": "png", "scale": 3}})
         if filter_caption:
             st.caption(filter_caption)
@@ -12247,7 +11956,7 @@ hvor begge forfattere har en kendt nationalitet, medtages."""
                 continue
             seen_pairs.add(key)
             _pair_rows.append({
-                "Nationalitet A": a, "Nationalitet B": b,
+                "Nationalitet A": country_name(a), "Nationalitet B": country_name(b),
                 "Forfatterpar": round(w, 1),
                 "Type": "Intra" if a == b else "Inter",
             })
@@ -12577,7 +12286,7 @@ Enheder med færre end fem forfatterpar vises ikke, da indekset er ustabilt ved 
             title=f"Nationalitetshomofili per {group_label.lower()}, {year}",
             **_layout_cs_hom,
         )
-        st.plotly_chart(_fig_cs_hom, use_container_width=True,
+        st.plotly_chart(_fig_cs_hom, width='content',
             config={"toImageButtonOptions": {"format": "png", "scale": 3}})
         if filter_caption:
             st.caption(filter_caption)
@@ -12622,7 +12331,7 @@ Klubfaktoren = DK-homofili-indeks / international-homofili-indeks.
             **_nat_bar_layout(_orgs_cs_hom, grouped=False),
         )
         ku_klub = round(_cs_hom_ku.get("DK") / _cs_hom_ku.get("International"), 2) if _cs_hom_ku.get("DK") and _cs_hom_ku.get("International") else None
-        st.plotly_chart(_fig_cs_klub, use_container_width=True,
+        st.plotly_chart(_fig_cs_klub, width='content',
             config={"toImageButtonOptions": {"format": "png", "scale": 3}})
         if filter_caption:
             st.caption(filter_caption)
@@ -12653,23 +12362,7 @@ Klubfaktoren = DK-homofili-indeks / international-homofili-indeks.
             key=f"dl_cs_homofili_{year}_{mode}",
         )
     
-    st.markdown("---")
 
-    _intl_fb = {org: sum(v for k, v in cs_size.get(org, {}).items() if k != "DK")
-                for org in orgs_for_comparison}
-    _render_share_comparison(
-        _intl_fb,
-        {org: org_cs_ew.get(org, {}).get("International", 0.0)
-         for org in orgs_for_comparison},
-        group_label,
-        title=f"Internationale forskeres andel af forfattere vs. sampubliceringer, {year}",
-        key=f"nat_share_{year}_{mode}",
-        org_ew_all={org: org_cs_ew_all.get(org, {}).get("International", 0.0)
-                    for org in orgs_for_comparison},
-        year=year, show_intra=True,
-        filter_caption=filter_caption
-    )
-    
     st.markdown("---")
 
     # _______Udvikling over tid
@@ -12689,9 +12382,9 @@ Klubfaktoren = DK-homofili-indeks / international-homofili-indeks.
             fig_nat = go.Figure()
             for i, cs in enumerate(_all_cs):
                 fig_nat.add_trace(go.Scatter(
+                    name=country_name(cs) if cs != "Andre" else "Andre",
                     x=years_sorted,
                     y=[all_years_data[y].get("nat_bidrag", {}).get(cs, 0) for y in years_sorted],
-                    name=cs,
                     mode="lines+markers",
                     line=dict(color=nat_colors_time[i], width=2),
                     marker=dict(size=8),
@@ -12737,7 +12430,7 @@ Klubfaktoren = DK-homofili-indeks / international-homofili-indeks.
 
             # Tabel
             _nat_pivot = (
-                [{"Nationalitet": cs,
+                [{"Nationalitet": country_name(cs),
                   **{str(y): all_years_data[y].get("nat_bidrag", {}).get(cs, 0) for y in years_sorted}}
                  for cs in _all_cs] +
                 [{"Nationalitet": "Total",
@@ -12806,7 +12499,6 @@ Klubfaktoren = DK-homofili-indeks / international-homofili-indeks.
                 xaxis=dict(tickmode="array", tickvals=years_sorted, dtick=1),
                 yaxis_title="Andel af forfatterpar (%)",
                 height=400, margin=dict(t=50),
-                legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="left", x=0),
                 title=f"Andel internationale forfatterpar{' (inkl. intra-enhed)' if _use_all_intl else ''} over tid, {years_sorted[0]}–{years_sorted[-1]}"
             )
             st.plotly_chart(fig_intl, width="stretch", key=f"intl_tid_{year}_{mode}",
@@ -12879,7 +12571,7 @@ altså en *danskerklub*-tendens. En klubfaktor < 1 indikerer det modsatte.
                     height=360, margin=dict(t=50),
                     title=f"Nationalitetshomofili og klubfaktor over tid, {years_sorted[0]}–{years_sorted[-1]}"
                 )
-                st.plotly_chart(fig_hom_cs, use_container_width=True,
+                st.plotly_chart(fig_hom_cs, width='content',
                     config={"toImageButtonOptions": {"format": "png", "scale": 3}})
                 if filter_caption:
                     st.caption(filter_caption)
