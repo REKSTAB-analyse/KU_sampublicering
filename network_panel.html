@@ -108,7 +108,7 @@ function attachClickHandler() {
         var info = nodeInfo[nodeId];
         if (!info) return;
         document.getElementById('panel-title').textContent = info.label;
-        document.getElementById('panel-meta').textContent = 'Forfatterbidrag: ' + info.size;
+        document.getElementById('panel-meta').textContent = 'Forfatterantal: ' + info.size;
         var tbody = document.getElementById('panel-body');
         tbody.innerHTML = '';
         if (info.neighbours.length === 0) {
