@@ -2352,11 +2352,35 @@ def compute_year_snapshot(content: dict, mode: str,
     }
 
 
+def check_password():
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if st.session_state.authenticated:
+        return True
+
+    st.markdown(" ")
+    st.markdown(" ")
+    st.markdown(" ")
+    
+    password = st.text_input("Kodeord", type="password")
+    if password:
+        if password == st.secrets["erda"]["app_password"]:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Forkert kodeord")
+
+    return False
+
+if not check_password():
+    st.stop()
 
 def main():
     # -----------------------------------------------------------------------
     # Load data 
     # -----------------------------------------------------------------------
+    
     data_by_year_CURIS = load_network_data()
 
     data_by_year_OpenAlex = {
@@ -2527,6 +2551,7 @@ def main():
         #if _key not in st.session_state:
             #st.session_state[_key] = True
 
+    # i developer mode?
     for _key, _default in [("cb_fac", True), ("cb_inst", False), ("cb_grp", False)]:
         if _key not in st.session_state:
             st.session_state[_key] = _default
