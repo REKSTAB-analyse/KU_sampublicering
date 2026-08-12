@@ -34,14 +34,12 @@ _TAB_RENDERERS = {
     "Datagrundlag": tab_datagrundlag.render,
 }
 
-
 def _tabs_to_show(mode: str, filters: dict) -> list[str]:
     """TODO (fase 2): port den betingede indsættelse af Køn/Nationaliteter/
     Internationalt samarbejde/FWCI/Forskningsoutput fra gl. main(),
     linje 3888-3903. Lige nu vises kun grundfanerne fra BASE_TABS_BY_MODE.
     """
     return BASE_TABS_BY_MODE.get(mode) or BASE_TABS_BY_MODE.get(base_mode(mode), ["Oversigt"])
-
 
 def main():
     st.set_page_config(
@@ -59,30 +57,6 @@ def main():
         st.image(load_logo(), width=180)
     with col_title:
         st.title("Sampublicering på Københavns Universitet")
-
-    # --- Sidepanel med aktive filtre (inkl. globalt metric-valg) ---
-    filters = render_sidepanel()
-    mode = filters.get("mode", "F")
-
-    # --- Faner: hver fane forespørger selv på pairs-parquet'en ---
-    tab_labels = _tabs_to_show(mode, filters)
-    tabs = st.tabs(tab_labels)
-    tabs_dict = dict(zip(tab_labels, tabs))
-
-    for label, tab in tabs_dict.items():
-        renderer = _TAB_RENDERERS.get(label)
-        if renderer is None:
-            continue
-        with tab:
-            renderer(filters)
-
-    st.markdown(f"""
-<hr style="margin-top: 50px;">
-<div style="text-align:center; color:#666; font-size: 0.9em;">
-  REKSTAB Analyse · Amanda Schramm Petersen · <a href="mailto:ascp@adm.ku.dk">ascp@adm.ku.dk</a>
-  · opdateret {_DEPLOY_DATE}
-</div>
-""", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
