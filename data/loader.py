@@ -14,6 +14,7 @@ from config import PAIRS_PARQUET_PATH, PUB_LONG_PARQUET_PATH, ERDA_ENABLED
 _ERDA = st.secrets["erda"]
 DATA_PATH = _ERDA["data_path"]
 
+
 @st.cache_resource
 def get_sftp():
     transport = paramiko.Transport((_ERDA["host"], 22))
@@ -153,6 +154,17 @@ def load_statsborgerskab_options() -> list:
     ).fetchall()
     return [r[0] for r in rows]
 
+@st.cache_data
+def load_institut_options(fakulteter: list) -> list:
+    if not fakulteter:
+        return []
+    ph = ", ".join("?" for _ in fakulteter)
+    sql = f"""
+        SELECT DISTINCT Inst FROM pubs
+        WHERE Inst IS NOT NULL AND Inst != '' AND Fak IN ({ph})
+        ORDER BY Inst
+    """
+    return [r[0] for r in get_pubs_cursor().execute(sql, fakulteter).fetchall()]
 
 # ---------------------------------------------------------------------------
 # ØVRIGE DATA (uændret SFTP/JSON/CSV - se note i modulets docstring)
@@ -258,7 +270,13 @@ def load_ku_totals() -> dict:
 
 @st.cache_data
 def load_logo() -> bytes:
-    return read_file("KU-logo.png")
+    """Logo hentes lokalt fra repoet, ikke via ERDA/SFTP - samme mønster som
+    KU_publikationer/data/loader.py::load_logo(). Læg KU-logo.png i
+    repo-roden (samme niveau som app.py)."""
+    logo_path = Path(__file__).parent.parent / "KU-logo.png"
+    if logo_path.exists():
+        return logo_path.read_bytes()
+    return b""
 
 
 @st.cache_data

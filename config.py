@@ -128,11 +128,11 @@ except Exception:
 
 if ERDA_ENABLED:
     _DATA_CACHE_DIR = Path(__file__).parent / "data_cache"
-    PAIRS_PARQUET_PATH = str(_DATA_CACHE_DIR / "KU_sampub_pairs_long.parquet")
+    PAIRS_PARQUET_PATH = str(_DATA_CACHE_DIR / "KU_CURIS_sampub_pairs_long.parquet")
     PUB_LONG_PARQUET_PATH = str(_DATA_CACHE_DIR / "KU_pub_long.parquet")
 else:
     # Lokal udvikling: peg på dine egne, allerede byggede filer
-    PAIRS_PARQUET_PATH = r"H:\Sampubliceringsapp\Data\KU_sampub_pairs_long.parquet"
+    PAIRS_PARQUET_PATH = r"H:\Sampubliceringsapp\Data\KU_CURIS_sampub_pairs_long.parquet"
     PUB_LONG_PARQUET_PATH = r"H:\Sampubliceringsapp\Data\KU_pub_long.parquet"
 
 # NB: PUB_LONG_PARQUET_PATH peger på SAMME fysiske fil som
@@ -199,6 +199,12 @@ BASE_TABS_BY_MODE = {
     "FN": ["Oversigt", "Datagrundlag"], "IN": ["Oversigt", "Datagrundlag"], "GN": ["Oversigt", "Datagrundlag"],
     "FIN": ["Oversigt", "Datagrundlag"], "FIGN": ["Oversigt", "Datagrundlag"],
     "FGN": ["Oversigt", "Datagrundlag"], "IGN": ["Oversigt", "Datagrundlag"],
+    # Køn OG Statsborgerskab samtidig (mulige siden sidepanelet bruger
+    # uafhængige checkbokse for de to, ikke et gensidigt udelukkende radio-valg):
+    "SN": ["Oversigt", "Datagrundlag"],
+    "FSN": ["Oversigt", "Datagrundlag"], "ISN": ["Oversigt", "Datagrundlag"], "GSN": ["Oversigt", "Datagrundlag"],
+    "FISN": ["Oversigt", "Datagrundlag"], "FIGSN": ["Oversigt", "Datagrundlag"],
+    "FGSN": ["Oversigt", "Datagrundlag"], "IGSN": ["Oversigt", "Datagrundlag"],
 }
 
 # ---------------------------------------------------------------------------
