@@ -7,3 +7,4 @@ pyarrow
 plotly
 openpyxl
 paramiko
+duckdb
