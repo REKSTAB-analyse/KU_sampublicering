@@ -233,7 +233,7 @@ skal indgå - uafhængigt for hver aktiv dimension.
                 "Open access (tom = alle)",
                 options=opts["open_access"], default=[], key="sp_oa",
             )
-            filters["open_access"] = valgte_oa or opts["open_access"]
+            filters["open_access"] = valgte_oa or (opts["open_access"] + ["", "Unknown"])
  
             valgte_doi = st.multiselect(
                 "Har DOI (tom = alle)",

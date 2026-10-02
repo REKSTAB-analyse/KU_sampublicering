@@ -95,17 +95,12 @@ def hls_gradient(base_hex: str, n: int, spread: float = 0.15) -> list[str]:
     return colors
 
 
-def node_colors_for_mode(node_keys, dims: list, mode: str) -> dict:
-    """Farve pr. netværksnode, ud fra hvilke dimensioner der er aktive:
-    - Fak + Inst begge til stede (fx FI, FIG): institut = "knækket" nuance
-      af moderfakultetets farve (hls_gradient).
-    - Kun Fak til stede (F, FG): fakultetets egen basisfarve, ingen nuancering.
-    - Kun Stil til stede, hverken Fak eller Inst (G): stillingsgruppe_colors().
-    - Andre kombinationer (fx ren I/IG, uden Fak): ingen naturlig basisfarve
-      at nuancere fra - falder tilbage til ku_color_sequence().
-
-    Dækker de tre tilfælde, du bad om (F/FIG/G) + rimelige fallbacks for
-    resten. Sig til, hvis fx FG eller IG skal farves anderledes.
+def node_colors_for_mode(node_keys, dims: list, mode: str, inst_fac_map: dict = None) -> dict:
+    """... (uændret docstring, tilføj:)
+    - Kun Inst til stede, uden Fak (ren I, eller IG): farves efter
+      institutets fakultetstilhør via inst_fac_map (se data/network.py::
+      load_inst_fac_map()) - samme nuanceringsprincip som Fak+Inst-grenen.
+      Uden inst_fac_map falder den tilbage til ku_color_sequence(), som før.
     """
     dim_index = {d: i for i, d in enumerate(dims)}
     has_fak = "Fak" in dim_index
@@ -130,6 +125,21 @@ def node_colors_for_mode(node_keys, dims: list, mode: str) -> dict:
     if has_fak:
         fac_colors = build_faculty_colors()
         return {key: fac_colors.get(key.split(" | ")[dim_index["Fak"]], "#122947") for key in keys}
+
+    if has_inst and not has_fak and inst_fac_map:
+        fac_colors = build_faculty_colors()
+        by_fac = {}
+        for key in keys:
+            inst = key.split(" | ")[dim_index["Inst"]]
+            fac = inst_fac_map.get(inst, "")
+            by_fac.setdefault(fac, []).append(key)
+        result = {}
+        for fac, fac_keys in by_fac.items():
+            fac_keys_sorted = sorted(fac_keys)
+            base = fac_colors.get(fac, "#888888")
+            for key, shade in zip(fac_keys_sorted, hls_gradient(base, len(fac_keys_sorted))):
+                result[key] = shade
+        return result
 
     if has_stil and not has_inst:
         grp_colors = stillingsgruppe_colors()

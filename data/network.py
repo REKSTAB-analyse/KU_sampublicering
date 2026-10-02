@@ -1,7 +1,10 @@
 import streamlit as st
 from math import pi, cos, sin
  
-from config import dims_for_mode, metric_count_sql, CPR, HIERARKI, base_mode, sex_in_mode, nat_in_mode, grp_in_mode, inst_in_mode
+from config import (
+    dims_for_mode, metric_count_sql, CPR, HIERARKI, FAC_ORDER,
+    base_mode, sex_in_mode, nat_in_mode, grp_in_mode, inst_in_mode,
+)
 from data.loader import get_pairs_cursor, get_pubs_cursor
  
 # UI-labels ("Mænd"/"Kvinder") -> koder i data ("M"/"K"). CPR = {"m": "Mænd", "k": "Kvinder"}.
@@ -24,11 +27,19 @@ def load_edges(filters: dict, mode: str) -> list[dict]:
     dims = dims_for_mode(mode)
     if not dims:
         return []
- 
-    cols_1 = ", ".join(f"{d}_1" for d in dims)
-    cols_2 = ", ".join(f"{d}_2" for d in dims)
+
     count_expr = metric_count_sql(filters.get("metric", "forfatterpar"))
- 
+
+    # Kanoniser par-retningen: (SCIENCE, SUND) og (SUND, SCIENCE) er samme
+    # kant, men itertools.combinations() i ETL'en bevarer IKKE en fast
+    # rækkefølge - uden dette ville de to retninger blive talt som to
+    # adskilte grupper (og dermed to overlappende kanter i netværket).
+    key_1 = " || '|' || ".join(f"{d}_1" for d in dims)
+    key_2 = " || '|' || ".join(f"{d}_2" for d in dims)
+    swap = f"({key_1}) > ({key_2})"
+    sel_a = ", ".join(f"CASE WHEN {swap} THEN {d}_2 ELSE {d}_1 END AS {d}_a" for d in dims)
+    sel_b = ", ".join(f"CASE WHEN {swap} THEN {d}_1 ELSE {d}_2 END AS {d}_b" for d in dims)
+
     where_clauses = ["Year BETWEEN ? AND ?"]
     params = [filters["aar_fra"], filters["aar_til"]]
  
@@ -40,10 +51,20 @@ def load_edges(filters: dict, mode: str) -> list[dict]:
         params.extend(values)
         params.extend(values)
  
-    both_sides_in("Fak", filters.get("fakultet"))
-    both_sides_in("Inst", filters.get("institutter"))
+    if "Fak" in dims or "Inst" in dims:
+        both_sides_in("Fak", filters.get("fakultet"))
+        both_sides_in("Inst", filters.get("institutter"))
     both_sides_in("Stil", filters.get("stillingsgrupper"))
  
+    if "Fak" in dims or "Inst" in dims:
+        ph_fac = ", ".join("?" for _ in FAC_ORDER)
+        where_clauses.append(f"Fak_1 IN ({ph_fac}) AND Fak_2 IN ({ph_fac})")
+        params.extend(FAC_ORDER)
+        params.extend(FAC_ORDER)
+    
+    if "Stil" in dims:
+        where_clauses.append("Stil_1 != 'Ukendt' AND Stil_2 != 'Ukendt'")
+
     koen_koder = [_KOEN_LABEL_TO_KODE.get(v, v) for v in filters.get("køn", [])]
     both_sides_in("Koen", koen_koder)
     both_sides_in("Statsbg", filters.get("statsborgerskab"))
@@ -58,9 +79,17 @@ def load_edges(filters: dict, mode: str) -> list[dict]:
     in_filter("Type", filters.get("typer"))
     in_filter("Indholdstype", filters.get("indholdstyper"))
     in_filter("Sprog", filters.get("sprog"))
-    in_filter("Peer_review", filters.get("peer"))
+    #in_filter("Peer_review", filters.get("peer"))
     in_filter("Open_Access", filters.get("open_access"))
- 
+    
+    peer_vals = filters.get("peer")
+    if peer_vals:
+        ph = ", ".join("?" for _ in peer_vals)
+        where_clauses.append(
+            f"COALESCE(NULLIF(Peer_review, ''), 'Ukendt') IN ({ph})"
+        )
+        params.extend(peer_vals)
+
     har_doi = filters.get("har_doi") or ["Ja", "Nej"]
     if set(har_doi) == {"Ja"}:
         where_clauses.append("DOI IS NOT NULL AND DOI != ''")
@@ -82,15 +111,15 @@ def load_edges(filters: dict, mode: str) -> list[dict]:
                 params.extend(allowed)
 
     where_sql = " AND ".join(where_clauses)
+    n = len(dims)
     sql = f"""
-        SELECT {cols_1}, {cols_2}, {count_expr} AS weight
+        SELECT {sel_a}, {sel_b}, {count_expr} AS weight
         FROM pairs
         WHERE {where_sql}
-        GROUP BY {cols_1}, {cols_2}
+        GROUP BY {", ".join(str(i) for i in range(1, 2 * n + 1))}
     """
     rows = get_pairs_cursor().execute(sql, params).fetchall()
- 
-    n = len(dims)
+
     result = []
     for row in rows:
         vals_1, vals_2, weight = row[:n], row[n:2 * n], row[-1]
@@ -221,7 +250,37 @@ def _build_node_meta(nodes: set, dims: list, mode: str) -> dict:
         node_meta[key] = rec
     return node_meta
  
- 
+@st.cache_data
+def load_inst_fac_map() -> dict:
+    """Institut -> fakultet(forkortelse)-opslag, udledt af pubs-tabellen
+    (KU_pub_long.parquet), som har Fak/Inst direkte uden _1/_2-suffiks.
+    Nødvendig i ren I-mode, hvor dims_for_mode("I") kun returnerer
+    ["Inst"] og node_meta derfor ikke selv bærer fakultetsinformation."""
+    sql = """
+        SELECT DISTINCT Inst, Fak
+        FROM pubs
+        WHERE Inst != '' AND Fak != ''
+    """
+    rows = get_pubs_cursor().execute(sql).fetchall()
+    return {inst: fak for inst, fak in rows}
+
+@st.cache_data
+def load_inst_kort_map() -> dict:
+    """Institut (fuldt navn) -> forkortet institutnavn, hentet direkte fra
+    Inst_kort_1/Inst_kort_2 i pairs-tabellen (udfyldt af HR/CURIS selv - se
+    create_sampub_CURIS_parquet.py). Bruges til at vise korte institutlabels
+    i netværksvisningen uden at ændre selve node-nøglerne (som stadig er de
+    fulde navne, så layout/farve/kant-logik forbliver uændret)."""
+    sql = """
+        SELECT Inst_1 AS inst, Inst_kort_1 AS inst_kort FROM pairs
+        WHERE Inst_1 != '' AND Inst_kort_1 != ''
+        UNION
+        SELECT Inst_2 AS inst, Inst_kort_2 AS inst_kort FROM pairs
+        WHERE Inst_2 != '' AND Inst_kort_2 != ''
+    """
+    rows = get_pairs_cursor().execute(sql).fetchall()
+    return {inst: inst_kort for inst, inst_kort in rows}
+
 def compute_layout(nodes_keep: set, node_meta: dict, mode: str, network_scale: int = 1200,
                     n_selected_nats: int = None) -> dict:
     """Porteret NÆSTEN ORDRET fra sampubliceringsapp.py, linje 1153-1588 -
@@ -335,7 +394,7 @@ def compute_layout(nodes_keep: set, node_meta: dict, mode: str, network_scale: i
             if nat_in_mode(mode):
                 R_INST = _r(k, network_scale // 3 + _R_NAT_est * 2, floor=network_scale // 3 + _R_NAT_est * 2)
             else:
-                R_INST = _r(k, 200, floor = network_scale // 3)
+                R_INST = _r(k, network_scale // 6, floor=network_scale // 3)
             if fac in ("TEO", "JUR"):
                 R_INST *= 0.3  # færre institutter - mindre cirkel
             for j, inst in enumerate(unique_insts):
@@ -343,11 +402,20 @@ def compute_layout(nodes_keep: set, node_meta: dict, mode: str, network_scale: i
                 inst_centers[(fac, inst)] = (cx + R_INST * cos(theta), cy + R_INST * sin(theta))
  
     elif base_mode(mode) == "I" and not sex_in_mode(mode) and not nat_in_mode(mode):
-        # Ren I-mode: flad ring, uafhængigt af fakultet
-        unique_insts = sorted({
-            node_meta[nid2].get("inst", "")
-            for nid2 in nodes_keep if node_meta[nid2].get("inst")
-        })
+        # Ren I-mode: flad ring, men institutterne grupperes og sorteres efter
+        # FAC_ORDER i stedet for ren alfabetisk institut-sortering.
+        inst_fac_map = load_inst_fac_map()
+        unique_insts = sorted(
+            {
+                node_meta[nid2].get("inst", "")
+                for nid2 in nodes_keep if node_meta[nid2].get("inst")
+            },
+            key=lambda inst: (
+                FAC_ORDER.index(inst_fac_map[inst])
+                if inst_fac_map.get(inst) in FAC_ORDER else len(FAC_ORDER),
+                inst,
+            ),
+        )
         n_insts = max(1, len(unique_insts))
         R_INST_FLAT = _r(n_insts, network_scale // 2, floor=network_scale)
         for j, inst in enumerate(unique_insts):

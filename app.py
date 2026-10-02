@@ -1,6 +1,6 @@
 import streamlit as st
 
-from config import dims_for_mode
+from config import dims_for_mode, BASE_TABS_BY_MODE
 from data.loader import load_logo, sync_data_from_erda, _DEPLOY_DATE, ERDA_ENABLED
 from data.network import load_edges, load_node_totals
 from components.sidepanel import render_sidepanel
@@ -20,6 +20,17 @@ import tabs.forskningsoutput as tab_forskningsoutput
 import tabs.netvaerksudvikling as tab_netvaerksudvikling
 import tabs.datagrundlag as tab_datagrundlag
 
+_TAB_RENDERERS = {
+    "Oversigt": tab_oversigt.render,
+    "Fakulteter": tab_fakulteter.render,
+    "Institutter": tab_institutter.render,
+    "Stillingsgrupper": tab_stillingsgrupper.render,
+    "Nøgleaktører": tab_noegleaktoerer.render,
+    "Samarbejdsmønstre": tab_samarbejdsmoenstre.render,
+    "Netværksudvikling": tab_netvaerksudvikling.render,
+    "Datagrundlag": tab_datagrundlag.render,
+}
+
 def main():
     st.set_page_config(
         page_title="KU Sampublicering",
@@ -31,11 +42,31 @@ def main():
     if ERDA_ENABLED:
         sync_data_from_erda()
 
+    if "popup_bekraeftet" not in st.session_state:
+        st.session_state.popup_bekraeftet = False
+
+    @st.dialog("Velkommen til Sampublicering på Københavns Universitet")
+    def _velkomst_popup():
+        st.markdown(
+"""
+Forfatternes organisatoriske tilknytning (fakultet, institut, stillingsgruppe) er
+baseret på HR-data, ikke selve publikationsdata. Det betyder, at tallene ikke
+nødvendigvis stemmer overens med de tal, du bliver præsenteret for i andre KU-kilder.
+"""
+        )
+        if st.button("OK", type="primary"):
+            st.session_state.popup_bekraeftet = True
+            st.rerun()
+
+    if not st.session_state.popup_bekraeftet:
+        _velkomst_popup()
+        st.stop()
+
     col_logo, col_title = st.columns([1, 4])
     with col_logo:
         st.image(load_logo(), width=180)
     with col_title:
-        st.title("Sampublicering på Københavns Universitet")
+        st.title("Sampublicering på Københavns Universitet (beta)")
 
     # --- Skriftstørrelse i widgets (undtagen sidepanelet) ---
     st.markdown(
@@ -56,7 +87,16 @@ def main():
 
     # --- Sidepanel med aktive filtre ---
     filters = render_sidepanel()
- 
+    
+    # XX
+    #from data.loader import get_cursor
+    #st.write(
+        #get_cursor().execute(
+            #"SELECT DISTINCT Edge_type_fak, Edge_type_inst, Edge_type_stil "
+            #"FROM pairs LIMIT 20"
+        #).fetchall()
+    #)
+
     # ---------------------------------------------------------------------
     # MIDLERTIDIG: direkte netværkstest gennem det rigtige sidepanel.
     # Erstat med rigtig fane-dispatch (se MIGRATION_MAP.md), når I er klar
@@ -78,6 +118,16 @@ def main():
         metric=filters["metric"],
     )
 
+    tab_labels = BASE_TABS_BY_MODE.get(mode, ["Oversigt", "Datagrundlag"])
+    tabs = st.tabs(tab_labels)
+    tabs_dict = dict(zip(tab_labels, tabs))
+
+    for label in tab_labels:
+        renderer = _TAB_RENDERERS.get(label)
+        if renderer is None:
+            continue
+        with tabs_dict[label]:
+            renderer(filters)
 
 if __name__ == "__main__":
     main()

@@ -3,9 +3,9 @@ import streamlit as st
 import streamlit.components.v1 as components
 from pyvis.network import Network
  
-from data.network import compute_layout_for_edges
+from data.network import compute_layout_for_edges, load_inst_fac_map, load_inst_kort_map
 from components.colors import node_colors_for_mode, add_alpha
-from config import base_mode, METRIC_LABELS
+from config import base_mode, METRIC_LABELS, make_abbr
 
 _SIZE_RANGE_BY_BASE_MODE = {
     "F":  (20, 100),
@@ -48,12 +48,42 @@ def render_pyvis_network(edges: list, dims: list, mode: str, node_sizes: dict = 
     ys = [p[1] for p in positions.values()]
     x_span = max(xs) - min(xs) or 1
     y_span = max(ys) - min(ys) or 1
- 
+
+    # Forkort institutnavne i selve labelen (fuldt navn bevares i title/
+    # tooltip) - lange, fulde institutnavne gjorde skriften ulæselig ved
+    # normal zoom. existing-sættet sikrer unikke forkortelser, selv hvis to
+    # institutter ville forkorte til samme bogstaver.
+    dim_index = {d: i for i, d in enumerate(dims)}
+    inst_abbrs = {}
+    if "Inst" in dim_index:
+        inst_kort_map = load_inst_kort_map()
+        inst_names = sorted({
+            node_key.split(" | ")[dim_index["Inst"]]
+            for node_key in positions.keys()
+        })
+        seen = set()
+        for name in inst_names:
+            abbr = inst_kort_map.get(name)
+            if not abbr:
+                abbr = make_abbr(name, existing=seen)
+            seen.add(abbr)
+            inst_abbrs[name] = abbr
+
+    def _display_label(node_key: str) -> str:
+        if "Inst" not in dim_index:
+            return node_key
+        parts = node_key.split(" | ")
+        parts[dim_index["Inst"]] = inst_abbrs.get(
+            parts[dim_index["Inst"]], parts[dim_index["Inst"]]
+        )
+        return " | ".join(parts)
+
     net = Network(height=f"{height}px", width="100%", bgcolor="#ffffff", font_color="#222222", directed=False)
     net.toggle_physics(False)  # AFGØRENDE: se modulets docstring
  
     max_size = max((node_sizes or {}).values(), default=1) or 1
-    colors = node_colors_for_mode(positions.keys(), dims, mode)
+    inst_fac_map = load_inst_fac_map() if "Inst" in dim_index else None
+    colors = node_colors_for_mode(positions.keys(), dims, mode, inst_fac_map=inst_fac_map)
     px_min_default, _ = _SIZE_RANGE_BY_BASE_MODE.get(base_mode(mode), _DEFAULT_SIZE_RANGE)
 
     for node_key, (x, y) in positions.items():
@@ -62,11 +92,18 @@ def render_pyvis_network(edges: list, dims: list, mode: str, node_sizes: dict = 
             size = _scale_node_size(node_sizes[node_key], max_size, mode)
         net.add_node(
             node_key,
-            label=node_key,
+            label=_display_label(node_key),
             x=x, y=y,
             physics=False,
             size=size,
             color=colors.get(node_key, "#888888"),
+            font={
+                "size": 46,
+                "face": "arial",
+                "color": "#1a1a1a",
+                "strokeWidth": 3,
+                "strokeColor": "#ffffff",
+            },
             title=f"{node_key}" + (f" ({node_sizes.get(node_key)} forfattere)" if node_sizes else ""),
         )
  

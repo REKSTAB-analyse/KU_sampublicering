@@ -1,5 +1,6 @@
 import math
 
+PLOTLY_CONFIG = {"displayModeBar": False}
 
 def scale_size_log(val: float, max_auth: float, px_min: float = 5, px_max: float = 60) -> float:
     if val <= 0 or max_auth <= 0:

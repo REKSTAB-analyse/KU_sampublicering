@@ -6,14 +6,21 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 HIERARKI = {
-    "Særlig stilling": -1,
-    "Øvrige VIP (DVIP)": 0,
-    "Ph.d.": 1,
-    "Stillinger u. adjunktniveau": 2,
+    "TAP AS": 11,
+    "TAP FU": 12,
+    "DTAP AS": 13,
+    "DTAP FU": 14,
+    "Øvrige VIP (DVIP)": 10,
+    "Særlig stilling (DVIP)": 9,
+    "Stillinger u. adjunktniveau (DVIP)": 8,
+    "Øvrige VIP": 7,
+    "Særlig stilling": 6,
+    "Stillinger u. adjunktniveau": 5,
+    "Ph.d.": 4,
     "Postdoc": 3,
-    "Adjunkt": 4,
-    "Lektor": 5,
-    "Professor": 6,
+    "Adjunkt": 2,
+    "Lektor": 1,
+    "Professor": 0,
 }
 
 CPR = {
