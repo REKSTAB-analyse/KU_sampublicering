@@ -1,5 +1,9 @@
 [theme]
 primaryColor = "#901a1E"
-
 [server]
 maxMessageSize = 5000
+[client]
+toolbarMode = "viewer"
+showErrorDetails = "none"
+[ui]
+hideTopBar = true
