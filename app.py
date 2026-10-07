@@ -6,6 +6,7 @@ from data.network import load_edges, load_node_totals
 from components.sidepanel import render_sidepanel
 from components.network_view import render_pyvis_network
 
+
 import tabs.oversigt as tab_oversigt
 import tabs.fakulteter as tab_fakulteter
 import tabs.institutter as tab_institutter
@@ -18,6 +19,7 @@ import tabs.internationalt as tab_internationalt
 import tabs.fwci as tab_fwci
 import tabs.forskningsoutput as tab_forskningsoutput
 import tabs.netvaerksudvikling as tab_netvaerksudvikling
+
 import tabs.datagrundlag as tab_datagrundlag
 
 _TAB_RENDERERS = {

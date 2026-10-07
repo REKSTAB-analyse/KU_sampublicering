@@ -22,6 +22,79 @@ _SIZE_POWER_BY_BASE_MODE = {
 }
 _DEFAULT_SIZE_POWER = 2.2
 
+_PNG_BUTTON_HTML = """
+<style>
+  #dl-png {
+    position: fixed; top: 8px; right: 8px; z-index: 1000;
+    width: 30px; height: 30px; padding: 4px;
+    background: transparent; border: none; outline: none;
+    border-radius: 4px; cursor: pointer;
+    opacity: 0; transition: opacity .15s;
+  }
+  body:hover #dl-png { opacity: 1; }
+  #dl-png svg { fill: rgba(68, 68, 68, 0.3); transition: fill .15s; }
+  #dl-png:hover svg { fill: rgba(68, 68, 68, 0.7); }
+</style>
+<button id="dl-png" type="button" title="Download som PNG">
+  <svg viewBox="0 0 24 24" width="20" height="20">
+    <circle cx="12" cy="12" r="3.2"/>
+    <path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0
+      2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24
+      -5 5-5 5 2.24 5 5-2.24 5-5 5z"/>
+  </svg>
+</button>
+<script>
+document.getElementById("dl-png").addEventListener("click", function () {
+  var PNG_SCALE = __PNG_SCALE__;      // 1 = skærmopløsning, 3 = 3x skarpere
+  var MAX_PIXELS = 36000000;          // loft, så browseren ikke løber tør
+  var cv = document.querySelector("#mynetwork canvas");
+  if (!cv) { return; }
+
+  var dprDesc = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+  var realDpr = window.devicePixelRatio || 1;
+  var cssW = cv.clientWidth, cssH = cv.clientHeight;
+  var scale = PNG_SCALE;
+  while (scale > 1 && cssW * cssH * Math.pow(realDpr * scale, 2) > MAX_PIXELS) {
+    scale -= 1;
+  }
+  var optW = network.canvas.options.width;
+  var optH = network.canvas.options.height;
+
+  // vis-network aflæser window.devicePixelRatio ved hver setSize() - sæt den
+  // midlertidigt op, tegn om, kopiér resultatet og gendan derefter.
+  Object.defineProperty(window, "devicePixelRatio",
+                        { value: realDpr * scale, configurable: true });
+  var out = document.createElement("canvas");
+  try {
+    network.setSize(optW, optH);
+    network.redraw();
+    var src = document.querySelector("#mynetwork canvas");
+    out.width = src.width;
+    out.height = src.height;
+    var ctx = out.getContext("2d");
+    ctx.fillStyle = "#ffffff";        // canvas er transparent som standard
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(src, 0, 0);
+  } finally {
+    if (dprDesc) { Object.defineProperty(window, "devicePixelRatio", dprDesc); }
+    else { delete window.devicePixelRatio; }
+    network.setSize(optW, optH);
+    network.redraw();
+  }
+
+  out.toBlob(function (blob) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "__PNG_FILENAME__";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }, "image/png");
+});
+</script>
+"""
+
 def _scale_node_size(val: float, max_val: float, mode: str) -> float:
     px_min, px_max = _SIZE_RANGE_BY_BASE_MODE.get(base_mode(mode), _DEFAULT_SIZE_RANGE)
     power = _SIZE_POWER_BY_BASE_MODE.get(base_mode(mode), _DEFAULT_SIZE_POWER)
@@ -33,7 +106,9 @@ def _scale_node_size(val: float, max_val: float, mode: str) -> float:
 
 def render_pyvis_network(edges: list, dims: list, mode: str, node_sizes: dict = None,
                           network_scale: int = 1200, edge_scale: float = 6.0,
-                          metric: str = "forfatterpar", height: int = 700) -> None:
+                          metric: str = "forfatterpar", height: int = 700,
+                          png_filename: str = "sampubliceringsnetværk.png",
+                          png_scale: int = 3) -> None:
  
     if not edges:
         st.info("Ingen kanter matcher de valgte filtre.")
@@ -128,4 +203,10 @@ def render_pyvis_network(edges: list, dims: list, mode: str, node_sizes: dict = 
  
     with open(html_path, "r", encoding="utf-8") as f:
         html = f.read()
+
+    button_html = (_PNG_BUTTON_HTML
+                   .replace("__PNG_FILENAME__", png_filename)
+                   .replace("__PNG_SCALE__", str(int(png_scale))))
+    html = html.replace("</body>", button_html + "</body>", 1)
+
     components.html(html, height=height + 50, scrolling=False)
